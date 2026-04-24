@@ -1,0 +1,23 @@
+# Swift / SPM build artifacts
+.build/
+*.o
+*.d
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+.swiftpm/
+
+# macOS
+.DS_Store
+**/.DS_Store
+
+# Compiled app bundle (build output)
+Nanoframe.app/
+
+# Icon source (compiled assets only)
+iconset.iconset/
+
+# Runtime / user data (UserDefaults, logs)
+/tmp/nanoframe_tv.log
