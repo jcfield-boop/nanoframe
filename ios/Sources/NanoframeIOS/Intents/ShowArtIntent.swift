@@ -17,10 +17,9 @@ struct ShowArtOnFrameIntent: AppIntent {
         categoryName: "Frame TV"
     )
 
-    /// Set to false so the intent runs in the background — Siri doesn't
-    /// need the app to be open. Generation + upload takes ~20–40 s;
-    /// Siri will show a progress spinner while it runs.
-    static var openAppWhenRun: Bool = false
+    /// Opens the app so you can see generation progress and any errors.
+    /// Set to false once everything is working if you want fully silent background execution.
+    static var openAppWhenRun: Bool = true
 
     @Parameter(title: "Description", description: "What to show on the TV — be as specific as you like.")
     var artDescription: String
@@ -29,7 +28,7 @@ struct ShowArtOnFrameIntent: AppIntent {
         // Pull settings from UserDefaults (shared with the main app)
         let tvIP = UserDefaults.standard.string(forKey: "tv_ip") ?? ""
         guard !tvIP.isEmpty else {
-            throw IntentError.tvIPNotSet
+            return .result(dialog: "TV IP address isn't set yet. Open the Nanoframe app and add it in Settings first.")
         }
 
         let providerRaw = UserDefaults.standard.string(forKey: "image_provider") ?? ""
