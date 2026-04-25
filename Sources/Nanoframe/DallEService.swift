@@ -28,11 +28,23 @@ struct DallEService {
     // MARK: - Public
 
     func generate(prompt: String, apiKey: String, provider: ImageProvider) async throws -> (jpeg: Data, image: NSImage) {
+        let enhanced = Self.enhanceForFrameTV(prompt)
         switch provider {
-        case .pollinations: return try await pollinations(prompt: prompt)
-        case .nanoBanana:   return try await nanoBanana(prompt: prompt, apiKey: apiKey)
-        case .openAI:       return try await openAI(prompt: prompt, apiKey: apiKey)
+        case .pollinations: return try await pollinations(prompt: enhanced)
+        case .nanoBanana:   return try await nanoBanana(prompt: enhanced, apiKey: apiKey)
+        case .openAI:       return try await openAI(prompt: enhanced, apiKey: apiKey)
         }
+    }
+
+    /// Wraps the user's prompt with technical guidance optimised for the Samsung Frame TV (LS03A).
+    /// The Frame has a matte anti-glare panel with a warm art-display profile — it rewards high
+    /// contrast, rich saturation and sharp detail, and does not use HDR in art mode.
+    static func enhanceForFrameTV(_ prompt: String) -> String {
+        let trimmed = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(trimmed), highly detailed, 16:9 composition, wide color gamut, deep blacks, " +
+               "rich saturated colors, high contrast, sharp fine detail, " +
+               "professional photography or museum-quality art print, " +
+               "optimised for matte anti-glare display, no HDR, no lens flare"
     }
 
     /// Only needed for OpenAI (1792×1024 → 3840×2160). Nano Banana returns 4K natively.
