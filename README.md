@@ -145,7 +145,9 @@ Covers: WebSocket envelope format, inner request field injection, response parsi
 
 ## Samsung Frame TV protocol notes
 
-Samsung's Frame TV art API is undocumented. Key discoveries:
+Samsung's Frame TV art API is undocumented. Nanoframe was developed and tested against a **Samsung Frame TV LS03A** running firmware **T-NKM2AKUC-2301.1**.
+
+Key discoveries:
 
 - Control WebSocket: `ws://<tv-ip>:8001/api/v2/channels/com.samsung.art-app`
 - Art requests use `ms.channel.emit` with `event: art_app_request`; the `data` field must be a **JSON-encoded string**, not an inline object
@@ -153,6 +155,11 @@ Samsung's Frame TV art API is undocumented. Key discoveries:
 - Image deletion is confirmed with `image_list_deleted`, not `image_deleted`
 - Image upload uses a separate TCP connection on a port provided in the `ready_to_use` event; `conn_info` is itself a JSON-encoded string
 - Both `id` and `request_id` must be present and equal in every request — newer firmware silently ignores requests missing `request_id`
+- Content categories: `MY-C0002` = user uploads (`MY_F*` IDs), `MY-C0004` = Samsung Art Store (`SAM-*` IDs)
+
+### Attributions
+
+Protocol behaviour was cross-referenced against the [**samsungtvws**](https://github.com/xchwarze/samsung-tv-ws-api) Python library, which provided the critical insight that `request_id` must equal `id` in every request — newer Frame TV firmware silently drops requests that omit it.
 
 ---
 
