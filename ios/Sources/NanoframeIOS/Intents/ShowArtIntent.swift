@@ -75,6 +75,52 @@ struct ShowArtOnFrameIntent: AppIntent {
     }
 }
 
+// MARK: - Revert Intent
+
+struct RevertFrameTVIntent: AppIntent {
+    static var title: LocalizedStringResource = "Resume Art Rotation on Frame TV"
+    static var description = IntentDescription(
+        "Removes the Nanoframe image and resumes Samsung's art rotation.",
+        categoryName: "Frame TV"
+    )
+    static var openAppWhenRun: Bool = false
+
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let tvIP = UserDefaults.standard.string(forKey: "tv_ip") ?? ""
+        guard !tvIP.isEmpty else {
+            return .result(dialog: "TV IP address isn't set. Open the Nanoframe app and add it in Settings first.")
+        }
+
+        Task.detached {
+            let client = SamsungArtClient(
+                host: tvIP,
+                savedToken: UserDefaults.standard.string(forKey: "samsung_tv_token") ?? ""
+            )
+            do {
+                try await client.checkReachable()
+                try await client.connect()
+                if !client.token.isEmpty {
+                    UserDefaults.standard.set(client.token, forKey: "samsung_tv_token")
+                }
+                let idsToDelete = UserDefaults.standard.bool(forKey: "delete_on_revert")
+                    ? (UserDefaults.standard.stringArray(forKey: "nanoframe_content_ids") ?? [])
+                    : []
+                try await client.revertToSamsungArt(deleteIds: idsToDelete)
+                client.disconnect()
+                if UserDefaults.standard.bool(forKey: "delete_on_revert") {
+                    UserDefaults.standard.set([], forKey: "nanoframe_content_ids")
+                }
+                // Cancel any pending scheduled revert since we just did it
+                BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: "com.nanoframe.revert")
+            } catch {
+                client.disconnect()
+            }
+        }
+
+        return .result(dialog: "Resuming art rotation on the Frame TV.")
+    }
+}
+
 // MARK: - Siri phrase registration
 
 struct NanoframeShortcuts: AppShortcutsProvider {
@@ -89,6 +135,17 @@ struct NanoframeShortcuts: AppShortcutsProvider {
             ],
             shortTitle: "Show Art on Frame TV",
             systemImageName: "tv"
+        )
+        AppShortcut(
+            intent: RevertFrameTVIntent(),
+            phrases: [
+                "Resume art rotation with \(.applicationName)",
+                "Revert the Frame TV with \(.applicationName)",
+                "Clear the Frame TV with \(.applicationName)",
+                "Next slide on the Frame TV with \(.applicationName)"
+            ],
+            shortTitle: "Resume Art Rotation",
+            systemImageName: "arrow.clockwise"
         )
     }
 }
