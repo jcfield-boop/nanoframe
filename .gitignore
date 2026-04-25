@@ -19,5 +19,9 @@ Nanoframe.app/
 # Icon source (compiled assets only)
 iconset.iconset/
 
+# iOS xcodegen output (regenerate with: cd ios && xcodegen generate)
+ios/*.xcodeproj/
+ios/build/
+
 # Runtime / user data (UserDefaults, logs)
 /tmp/nanoframe_tv.log
