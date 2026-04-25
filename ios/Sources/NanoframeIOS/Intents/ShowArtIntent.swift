@@ -1,4 +1,5 @@
 import AppIntents
+import BackgroundTasks
 import Foundation
 
 // MARK: - App Intent
@@ -56,17 +57,13 @@ struct ShowArtOnFrameIntent: AppIntent {
                     UserDefaults.standard.set(ids, forKey: "nanoframe_content_ids")
                 }
 
+                // Schedule revert via BGTaskScheduler so iOS wakes the app
+                // at the right time even if it has been killed.
                 if autoRevert && revertMinutes > 0 {
-                    try? await Task.sleep(nanoseconds: UInt64(revertMinutes * 60) * 1_000_000_000)
-                    let revertClient = SamsungArtClient(host: tvIP, savedToken:
-                        UserDefaults.standard.string(forKey: "samsung_tv_token") ?? "")
-                    try? await revertClient.checkReachable()
-                    try? await revertClient.connect()
-                    let idsToDelete = UserDefaults.standard.bool(forKey: "delete_on_revert")
-                        ? (UserDefaults.standard.stringArray(forKey: "nanoframe_content_ids") ?? [])
-                        : []
-                    try? await revertClient.revertToSamsungArt(deleteIds: idsToDelete)
-                    revertClient.disconnect()
+                    let request = BGProcessingTaskRequest(identifier: "com.nanoframe.revert")
+                    request.earliestBeginDate = Date(timeIntervalSinceNow: TimeInterval(revertMinutes * 60))
+                    request.requiresNetworkConnectivity = true
+                    try? BGTaskScheduler.shared.submit(request)
                 }
             } catch {
                 // Errors are silent in background mode — open the app to diagnose

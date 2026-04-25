@@ -33,6 +33,10 @@ targets:
         NSLocalNetworkUsageDescription: "Nanoframe connects to your Samsung Frame TV over Wi-Fi to display AI-generated art."
         NSBonjourServices:
           - "_samsungavrccommand._tcp"
+        BGTaskSchedulerPermittedIdentifiers:
+          - "com.nanoframe.revert"
+        UIBackgroundModes:
+          - processing
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
           - UIInterfaceOrientationLandscapeLeft
