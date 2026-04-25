@@ -88,15 +88,16 @@ struct ShowArtOnFrameIntent: AppIntent {
 
 /// Registers automatic Siri phrases so users don't need to open Shortcuts.app first.
 /// Requires iOS 16.4+ and app to be run at least once on device.
+/// Siri will prompt "What would you like to show?" for the description parameter.
 struct NanoframeShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
             intent: ShowArtOnFrameIntent(),
             phrases: [
-                "Show \(\.$artDescription) on the Frame TV with \(.applicationName)",
-                "Put \(\.$artDescription) on my TV with \(.applicationName)",
-                "Display \(\.$artDescription) on the Frame with \(.applicationName)",
-                "Change the art to \(\.$artDescription) with \(.applicationName)"
+                "Show art on the Frame TV with \(.applicationName)",
+                "Put something on my TV with \(.applicationName)",
+                "Change the Frame TV art with \(.applicationName)",
+                "Display art on the Frame with \(.applicationName)"
             ],
             shortTitle: "Show Art on Frame TV",
             systemImageName: "tv"
