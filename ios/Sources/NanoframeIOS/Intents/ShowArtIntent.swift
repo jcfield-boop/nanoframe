@@ -3,13 +3,6 @@ import Foundation
 
 // MARK: - App Intent
 
-/// Exposed to Siri and the Shortcuts app.
-/// Siri phrases (after adding to Shortcuts):
-///   "Show a sunset on the Frame TV using Nanoframe"
-///   "Put puppies playing on my TV using Nanoframe"
-///
-/// With AppShortcutsProvider below, users can also say:
-///   "Show [art description] on the Frame TV"  — no setup required.
 struct ShowArtOnFrameIntent: AppIntent {
     static var title: LocalizedStringResource = "Show Art on Frame TV"
     static var description = IntentDescription(
@@ -17,15 +10,14 @@ struct ShowArtOnFrameIntent: AppIntent {
         categoryName: "Frame TV"
     )
 
-    /// Opens the app so you can see generation progress and any errors.
-    /// Set to false once everything is working if you want fully silent background execution.
-    static var openAppWhenRun: Bool = true
+    // Runs silently in the background — Siri gets an immediate response
+    // while generation and upload continue as a detached task.
+    static var openAppWhenRun: Bool = false
 
     @Parameter(title: "Description", description: "What to show on the TV — be as specific as you like.")
     var artDescription: String
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        // Pull settings from UserDefaults (shared with the main app)
         let tvIP = UserDefaults.standard.string(forKey: "tv_ip") ?? ""
         guard !tvIP.isEmpty else {
             return .result(dialog: "TV IP address isn't set yet. Open the Nanoframe app and add it in Settings first.")
@@ -35,59 +27,59 @@ struct ShowArtOnFrameIntent: AppIntent {
         let provider    = ImageProvider(rawValue: providerRaw) ?? .pollinations
         let apiKey: String
         switch provider {
-        case .openAI:      apiKey = UserDefaults.standard.string(forKey: "openai_api_key") ?? ""
-        case .nanoBanana:  apiKey = UserDefaults.standard.string(forKey: "nb_api_key") ?? ""
+        case .openAI:       apiKey = UserDefaults.standard.string(forKey: "openai_api_key") ?? ""
+        case .nanoBanana:   apiKey = UserDefaults.standard.string(forKey: "nb_api_key") ?? ""
         case .pollinations: apiKey = ""
         }
         let savedToken = UserDefaults.standard.string(forKey: "samsung_tv_token") ?? ""
+        let autoRevert    = UserDefaults.standard.bool(forKey: "auto_revert")
+        let revertMinutes = UserDefaults.standard.integer(forKey: "revert_minutes")
 
-        // Generate image
-        let svc = DallEService()
-        let (jpeg, _) = try await svc.generate(prompt: artDescription, apiKey: apiKey, provider: provider)
-        let upscaled  = svc.upscaleTo4K(jpeg) ?? jpeg
+        // Return immediately to Siri, do the work in the background.
+        // This avoids Siri's ~10 s timeout on long-running intents.
+        Task.detached {
+            do {
+                let svc      = DallEService()
+                let (jpeg, _) = try await svc.generate(prompt: artDescription, apiKey: apiKey, provider: provider)
+                let upscaled  = svc.upscaleTo4K(jpeg) ?? jpeg
 
-        // Send to TV
-        let client = SamsungArtClient(host: tvIP, savedToken: savedToken)
-        try await client.checkReachable()
-        try await client.connect()
-        if !client.token.isEmpty {
-            UserDefaults.standard.set(client.token, forKey: "samsung_tv_token")
-        }
-        let contentId = try await client.uploadAndDisplay(upscaled)
-        if !contentId.isEmpty {
-            var ids = UserDefaults.standard.stringArray(forKey: "nanoframe_content_ids") ?? []
-            ids.append(contentId)
-            UserDefaults.standard.set(ids, forKey: "nanoframe_content_ids")
-        }
+                let client = SamsungArtClient(host: tvIP, savedToken: savedToken)
+                try await client.checkReachable()
+                try await client.connect()
+                if !client.token.isEmpty {
+                    UserDefaults.standard.set(client.token, forKey: "samsung_tv_token")
+                }
+                let contentId = try await client.uploadAndDisplay(upscaled)
+                if !contentId.isEmpty {
+                    var ids = UserDefaults.standard.stringArray(forKey: "nanoframe_content_ids") ?? []
+                    ids.append(contentId)
+                    UserDefaults.standard.set(ids, forKey: "nanoframe_content_ids")
+                }
 
-        // Schedule auto-revert if enabled
-        let autoRevert     = UserDefaults.standard.bool(forKey: "auto_revert")
-        let revertMinutes  = UserDefaults.standard.integer(forKey: "revert_minutes")
-        if autoRevert && revertMinutes > 0 {
-            // Kick off a detached background task; this outlives the intent's perform()
-            Task.detached {
-                try? await Task.sleep(nanoseconds: UInt64(revertMinutes * 60) * 1_000_000_000)
-                let revertClient = SamsungArtClient(host: tvIP, savedToken:
-                    UserDefaults.standard.string(forKey: "samsung_tv_token") ?? "")
-                try? await revertClient.checkReachable()
-                try? await revertClient.connect()
-                let idsToDelete = UserDefaults.standard.bool(forKey: "delete_on_revert")
-                    ? (UserDefaults.standard.stringArray(forKey: "nanoframe_content_ids") ?? [])
-                    : []
-                try? await revertClient.revertToSamsungArt(deleteIds: idsToDelete)
-                revertClient.disconnect()
+                if autoRevert && revertMinutes > 0 {
+                    try? await Task.sleep(nanoseconds: UInt64(revertMinutes * 60) * 1_000_000_000)
+                    let revertClient = SamsungArtClient(host: tvIP, savedToken:
+                        UserDefaults.standard.string(forKey: "samsung_tv_token") ?? "")
+                    try? await revertClient.checkReachable()
+                    try? await revertClient.connect()
+                    let idsToDelete = UserDefaults.standard.bool(forKey: "delete_on_revert")
+                        ? (UserDefaults.standard.stringArray(forKey: "nanoframe_content_ids") ?? [])
+                        : []
+                    try? await revertClient.revertToSamsungArt(deleteIds: idsToDelete)
+                    revertClient.disconnect()
+                }
+            } catch {
+                // Errors are silent in background mode — open the app to diagnose
+                print("[Nanoframe] Siri intent failed: \(error)")
             }
         }
 
-        return .result(dialog: "Sending \(artDescription) to the Frame TV now — it'll appear in about a minute.")
+        return .result(dialog: "On it — \(artDescription) will appear on the Frame TV in about a minute.")
     }
 }
 
 // MARK: - Siri phrase registration
 
-/// Registers automatic Siri phrases so users don't need to open Shortcuts.app first.
-/// Requires iOS 16.4+ and app to be run at least once on device.
-/// Siri will prompt "What would you like to show?" for the description parameter.
 struct NanoframeShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
         AppShortcut(
@@ -101,18 +93,5 @@ struct NanoframeShortcuts: AppShortcutsProvider {
             shortTitle: "Show Art on Frame TV",
             systemImageName: "tv"
         )
-    }
-}
-
-// MARK: - Intent errors
-
-enum IntentError: LocalizedError {
-    case tvIPNotSet
-
-    var errorDescription: String? {
-        switch self {
-        case .tvIPNotSet:
-            return "TV IP address not set — open Nanoframe and add it in Settings first."
-        }
     }
 }
