@@ -25,6 +25,9 @@
 - **4K upscaling** — Pollinations and DALL·E images are upscaled to 3840×2160 before upload
 - **Push to Frame TV** — uploads over WebSocket on your local network; handles Samsung's pairing flow automatically
 - **Auto-revert** — optionally reverts to Samsung's art rotation after a configurable delay (5 min → 1 hour)
+- **Gallery** — every image sent to the TV is saved locally; browse, reload, resend, or delete from both the gallery and the TV
+- **Save to file / Photos** — export any generated image as a JPEG (macOS: NSSavePanel; iOS: Camera Roll)
+- **Keep on TV** — cancel a pending auto-revert with one tap to leave the current image up indefinitely
 - **Siri voice control** (iOS) — two commands, no app required:
   - *"Show art on the Frame TV"* — generate and display
   - *"Resume art rotation"* — immediately revert to Samsung's slideshow
@@ -51,6 +54,24 @@ swift run Nanoframe
 ```
 
 On first launch, open **Settings** (gear icon) and enter your TV's IP address. Your Samsung remote will show a pairing prompt the first time — accept it.
+
+### Install to /Applications
+
+To run Nanoframe as a proper app from Launchpad or Spotlight:
+
+```bash
+cd nanoframe
+swift build -c release
+# First time — creates the .app bundle
+mkdir -p /Applications/Nanoframe.app/Contents/{MacOS,Resources}
+cp .build/release/Nanoframe /Applications/Nanoframe.app/Contents/MacOS/Nanoframe
+# Info.plist only needed once (already written if you used the install script)
+```
+
+After code changes, just copy the new binary:
+```bash
+swift build -c release && cp .build/release/Nanoframe /Applications/Nanoframe.app/Contents/MacOS/Nanoframe
+```
 
 ---
 
@@ -103,11 +124,32 @@ API keys are entered in Settings and stored in UserDefaults on-device — never 
 
 ## Auto-revert
 
-Enable **Auto-revert** in Settings to automatically resume Samsung's art rotation after a configurable delay (5 min → 1 hour). A countdown is shown and you can tap **Revert Now** at any time.
+Enable **Auto-revert** in Settings to automatically resume Samsung's art rotation after a configurable delay (5 min → 1 hour). A countdown is shown in the sidebar and you can tap:
 
-On iOS, you can also just say *"Resume art rotation with Nanoframe"* to revert immediately.
+- **Revert Now** — immediately send the TV back to art rotation
+- **Keep** — cancel the countdown and leave the current image on the TV indefinitely
 
-Enable **Delete on revert** to remove Nanoframe-uploaded images from My Photos when reverting — only images uploaded by this app are ever deleted.
+On iOS, you can also say *"Resume art rotation with Nanoframe"* to revert immediately via Siri.
+
+Enable **Delete on revert** to remove Nanoframe-uploaded images from My Photos (TV) when reverting — only images uploaded by this app are ever deleted.
+
+---
+
+## Gallery
+
+Every image you send to the TV is automatically saved to a local gallery (macOS: `~/Library/Application Support/Nanoframe/`; iOS: app Documents folder).
+
+**macOS** — click the **⊞** gallery icon in the status bar (bottom-left of the sidebar).  
+**iOS** — tap the gallery icon in the navigation bar.
+
+From the gallery you can:
+
+| Action | Description |
+|---|---|
+| **Load into editor** | Restores the prompt and image so you can resend or tweak |
+| **Send to TV** | Pushes the saved image directly to the Frame TV |
+| **Save to file / Photos** | macOS: NSSavePanel export; iOS: saves to Camera Roll |
+| **Delete** | Remove from gallery only, or from gallery *and* the TV |
 
 ---
 
@@ -117,9 +159,11 @@ Enable **Delete on revert** to remove Nanoframe-uploaded images from My Photos w
 Sources/
   Nanoframe/                    macOS app
     NanoframeApp.swift          App entry point
-    ContentView.swift           Main window + settings + generation flow
+    ContentView.swift           Main window + AppViewModel (generate, send, revert, keep)
     DallEService.swift          Image generation + Frame TV prompt enhancement
     SamsungArtClient.swift      Samsung Frame TV WebSocket + TCP upload protocol
+    ImageStore.swift            Local gallery persistence (JPEG + metadata)
+    GalleryView.swift           Gallery grid, thumbnail cells, image detail sheet
     RemoteTriggerServer.swift   Local HTTP server for Lango voice triggers (port 11436)
     HelpView.swift              In-app help panel
   ProtocolTests/
@@ -133,6 +177,8 @@ ios/
     ContentView.swift           SwiftUI UI + AppViewModel
     DallEService.swift          Image generation (UIKit version)
     SamsungArtClient.swift      Samsung Frame TV protocol (shared logic, no AppKit)
+    ImageStore.swift            Local gallery persistence (UIImage version)
+    GalleryView.swift           Gallery grid + image detail sheet (iOS)
     Intents/
       ShowArtIntent.swift       Two Siri App Intents: show art + resume rotation
     Resources/
