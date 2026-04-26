@@ -11,21 +11,23 @@
 
 ## Platforms
 
-| Platform | Location | Siri |
+| Platform | Location | Voice control |
 |---|---|---|
-| **macOS 14+** | `Sources/Nanoframe/` | Via Lango ESP32 voice assistant |
-| **iOS 16+** | `ios/` | Native App Intents — works hands-free |
+| **macOS 14+** | `Sources/Nanoframe/` | Lango ESP32 voice assistant |
+| **iOS 16+** | `ios/` | Native Siri App Intents |
 
 ---
 
 ## Features
 
 - **Three image providers** — Pollinations.ai (free, no key), Nano Banana (native 4K), or DALL·E 3 (OpenAI)
-- **Frame TV optimised prompts** — every prompt is automatically enhanced with display-specific guidance (wide gamut, high contrast, matte panel, no HDR) before being sent to the provider
+- **Frame TV optimised prompts** — every prompt is automatically enhanced with display-specific guidance (wide colour gamut, high contrast, matte anti-glare panel, no HDR) before being sent to the provider
 - **4K upscaling** — Pollinations and DALL·E images are upscaled to 3840×2160 before upload
 - **Push to Frame TV** — uploads over WebSocket on your local network; handles Samsung's pairing flow automatically
-- **Auto-revert** — optionally reverts to Samsung's own art rotation after a configurable delay (5 min → 1 hour)
-- **Siri voice control** (iOS) — say *"Show art on the Frame TV"* and Siri asks what to display; generates and sends without opening the app
+- **Auto-revert** — optionally reverts to Samsung's art rotation after a configurable delay (5 min → 1 hour)
+- **Siri voice control** (iOS) — two commands, no app required:
+  - *"Show art on the Frame TV"* — generate and display
+  - *"Resume art rotation"* — immediately revert to Samsung's slideshow
 - **Lango voice control** (macOS) — ESP32-S3 assistant triggers generation over the local network
 - **TV debug log** — live WebSocket message panel for troubleshooting (toggle in Settings)
 - **Protocol test suite** — `swift run ProtocolTests` validates every layer of the Samsung art wire format without touching a real TV
@@ -68,17 +70,22 @@ xcodegen generate
 open NanoframeIOS.xcodeproj
 ```
 
-In Xcode: select the target → **Signing & Capabilities** → set your Team → add the **Siri** capability → run on your device or simulator.
+In Xcode: click the project → **NanoframeIOS** target → **Signing & Capabilities** → set your **Team** → add the **Siri** capability → run on your device or simulator.
 
-### Siri
+On first launch, open **Settings** in the app and enter your TV's IP address.
 
-After running the app once, say any of these to Siri:
+### Siri commands
 
-- *"Show art on the Frame TV with Nanoframe"*
-- *"Put something on my TV with Nanoframe"*
-- *"Change the Frame TV art with Nanoframe"*
+After running the app once, these phrases work with Siri — no Shortcuts setup needed:
 
-Siri will ask *"What would you like to show?"*, then generate and send the image in the background — no need to open the app.
+| Say | What happens |
+|---|---|
+| *"Show art on the Frame TV with Nanoframe"* | Siri asks what to show, then generates and sends it |
+| *"Resume art rotation with Nanoframe"* | Immediately reverts to Samsung's art slideshow |
+
+Both commands run in the background — the app doesn't need to be open.
+
+The revert command is scheduled via `BGTaskScheduler` so iOS wakes the app at the right time even if it has been killed. Timing is approximate but reliable.
 
 ---
 
@@ -98,7 +105,9 @@ API keys are entered in Settings and stored in UserDefaults on-device — never 
 
 Enable **Auto-revert** in Settings to automatically resume Samsung's art rotation after a configurable delay (5 min → 1 hour). A countdown is shown and you can tap **Revert Now** at any time.
 
-Enable **Delete on revert** to remove Nanoframe-uploaded images from My Photos when the timer fires — only images uploaded by this app are ever deleted.
+On iOS, you can also just say *"Resume art rotation with Nanoframe"* to revert immediately.
+
+Enable **Delete on revert** to remove Nanoframe-uploaded images from My Photos when reverting — only images uploaded by this app are ever deleted.
 
 ---
 
@@ -120,15 +129,15 @@ ios/
   project.yml                   xcodegen spec
   NanoframeIOS.entitlements     Siri entitlement
   Sources/NanoframeIOS/
-    NanoframeApp.swift          @main entry point
+    NanoframeApp.swift          @main entry point + BGTaskScheduler registration
     ContentView.swift           SwiftUI UI + AppViewModel
     DallEService.swift          Image generation (UIKit version)
     SamsungArtClient.swift      Samsung Frame TV protocol (shared logic, no AppKit)
     Intents/
-      ShowArtIntent.swift       Siri App Intent + AppShortcutsProvider
+      ShowArtIntent.swift       Two Siri App Intents: show art + resume rotation
     Resources/
       Assets.xcassets/          App icon
-      Info.plist                Local network permission
+      Info.plist                Local network + background task permissions
 ```
 
 ---
