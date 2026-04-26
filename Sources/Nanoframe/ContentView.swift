@@ -170,6 +170,12 @@ class AppViewModel: ObservableObject {
                 uploadedContentIds = (uploadedContentIds + [contentId])
             }
 
+            // Save to gallery
+            let savedItem = ImageStore.shared.add(jpeg: data, prompt: prompt, contentId: contentId)
+            if !contentId.isEmpty {
+                ImageStore.shared.setContentId(contentId, for: savedItem.id)
+            }
+
             uploadProgress = 1
             phase = .done
             sendStatus = "Displayed on Frame TV ✓"
@@ -214,6 +220,15 @@ class AppViewModel: ObservableObject {
         revertTask?.cancel()
         revertTask = nil
         revertAt = nil
+    }
+
+    func keepOnTV() {
+        cancelRevert()
+        sendStatus = "Keeping on TV — revert cancelled"
+        Task {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if sendStatus == "Keeping on TV — revert cancelled" { sendStatus = "" }
+        }
     }
 
     private func doRevert() async {
@@ -263,6 +278,7 @@ struct ContentView: View {
     @StateObject private var vm = AppViewModel()
     @State private var showSettings = false
     @State private var showHelp     = false
+    @State private var showGallery  = false
     @State private var server: RemoteTriggerServer?
 
     var body: some View {
@@ -279,6 +295,7 @@ struct ContentView: View {
         .frame(minWidth: 900, minHeight: 600)
         .sheet(isPresented: $showSettings) { SettingsView(vm: vm) }
         .sheet(isPresented: $showHelp)     { HelpView() }
+        .sheet(isPresented: $showGallery)  { GalleryView(vm: vm) }
         .alert("Error", isPresented: Binding(get: { vm.errorMessage != nil },
                                              set: { if !$0 { vm.errorMessage = nil } })) {
             Button("OK") { vm.errorMessage = nil }
@@ -411,6 +428,10 @@ struct ContentView: View {
                                         .foregroundStyle(.secondary)
                                 }
                                 Spacer()
+                                Button("Keep") { vm.keepOnTV() }
+                                    .font(.caption2)
+                                    .buttonStyle(.plain)
+                                    .foregroundStyle(.green)
                                 Button("Revert Now") { vm.revertNow() }
                                     .font(.caption2)
                                     .buttonStyle(.plain)
@@ -436,7 +457,18 @@ struct ContentView: View {
                     } label: { Image(systemName: "doc.on.doc") }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
                     .help("Copy image to clipboard")
+
+                    Button {
+                        if let jpeg = img.jpegData {
+                            ImageStore.shared.saveToFile(jpeg, prompt: vm.prompt)
+                        }
+                    } label: { Image(systemName: "square.and.arrow.down") }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .help("Save image to file…")
                 }
+                Button { showGallery  = true } label: { Image(systemName: "photo.on.rectangle") }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .help("Gallery")
                 Button { showHelp     = true } label: { Image(systemName: "questionmark.circle") }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
                     .help("Help")
