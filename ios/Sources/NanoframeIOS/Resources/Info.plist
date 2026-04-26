@@ -30,6 +30,8 @@
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>Nanoframe connects to your Samsung Frame TV over Wi-Fi to display AI-generated art.</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>Save generated artwork to your Photos library.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>processing</string>

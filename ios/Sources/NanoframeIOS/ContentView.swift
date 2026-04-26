@@ -1,4 +1,6 @@
 import SwiftUI
+import Photos
+import BackgroundTasks
 
 // MARK: - ViewModel
 
@@ -142,6 +144,12 @@ class AppViewModel: ObservableObject {
             if !contentId.isEmpty {
                 uploadedContentIds = uploadedContentIds + [contentId]
             }
+            // Save to local gallery
+            let galleryItem = ImageStore.shared.add(
+                jpeg: upscaled,
+                prompt: prompt,
+                contentId: contentId
+            )
             uploadProgress = 1
             phase = .done
             sendStatus = "Displayed on Frame TV ✓"
@@ -153,6 +161,35 @@ class AppViewModel: ObservableObject {
             sendStatus = ""
             uploadProgress = 0
             phase = .ready
+        }
+    }
+
+    // MARK: Save to Photos
+
+    func saveToPhotos(_ image: UIImage) async {
+        let status = await PHPhotoLibrary.requestAuthorization(for: .addOnly)
+        guard status == .authorized || status == .limited else {
+            errorMessage = "Photos access denied — enable it in Settings."
+            return
+        }
+        do {
+            try await PHPhotoLibrary.shared().performChanges {
+                PHAssetChangeRequest.creationRequestForAsset(from: image)
+            }
+        } catch {
+            errorMessage = "Couldn't save to Photos: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: Keep on TV (cancel pending revert)
+
+    func keepOnTV() {
+        cancelRevert()
+        BGTaskScheduler.shared.cancel(taskRequestWithIdentifier: "com.nanoframe.revert")
+        sendStatus = "Keeping on TV — art rotation paused."
+        Task {
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+            if sendStatus == "Keeping on TV — art rotation paused." { sendStatus = "" }
         }
     }
 
@@ -224,6 +261,7 @@ class AppViewModel: ObservableObject {
 struct ContentView: View {
     @EnvironmentObject var vm: AppViewModel
     @State private var showSettings = false
+    @State private var showGallery  = false
     @FocusState private var promptFocused: Bool
 
     var body: some View {
@@ -243,6 +281,11 @@ struct ContentView: View {
             .navigationTitle("Nanoframe")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button { showGallery = true } label: {
+                        Image(systemName: "photo.on.rectangle")
+                    }
+                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button { showSettings = true } label: {
                         Image(systemName: "gearshape")
@@ -250,8 +293,17 @@ struct ContentView: View {
                 }
             }
             .sheet(isPresented: $showSettings) {
-                SettingsView()
-                    .environmentObject(vm)
+                SettingsView().environmentObject(vm)
+            }
+            .sheet(isPresented: $showGallery) {
+                NavigationStack {
+                    GalleryView().environmentObject(vm)
+                        .toolbar {
+                            ToolbarItem(placement: .navigationBarTrailing) {
+                                Button("Done") { showGallery = false }
+                            }
+                        }
+                }
             }
         }
     }
@@ -284,21 +336,35 @@ struct ContentView: View {
             }
         }
 
-        // Revert countdown
-        if let at = vm.revertAt {
-            HStack {
-                Image(systemName: "clock.arrow.circlepath")
-                    .foregroundStyle(.orange)
-                TimelineView(.periodic(from: .now, by: 30)) { _ in
-                    let mins = max(0, Int(at.timeIntervalSinceNow / 60) + 1)
-                    Text("Reverts in ~\(mins) min")
-                        .font(.caption)
+        // Save + revert controls
+        if vm.generatedImage != nil {
+            HStack(spacing: 12) {
+                // Save to Photos
+                Button {
+                    Task { await vm.saveToPhotos(vm.generatedImage!) }
+                } label: {
+                    Label("Save", systemImage: "square.and.arrow.down")
+                        .font(.caption.bold())
+                }
+                .buttonStyle(.bordered)
+
+                Spacer()
+
+                // Revert countdown / Keep on TV
+                if let at = vm.revertAt {
+                    TimelineView(.periodic(from: .now, by: 30)) { _ in
+                        let mins = max(0, Int(at.timeIntervalSinceNow / 60) + 1)
+                        Text("Reverts in ~\(mins) min")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                    Button("Keep") { vm.keepOnTV() }
+                        .font(.caption.bold())
+                        .foregroundStyle(.green)
+                    Button("Revert Now") { vm.revertNow() }
+                        .font(.caption.bold())
                         .foregroundStyle(.orange)
                 }
-                Spacer()
-                Button("Revert Now") { vm.revertNow() }
-                    .font(.caption.bold())
-                    .foregroundStyle(.orange)
             }
             .padding(.horizontal, 4)
         }
