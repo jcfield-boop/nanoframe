@@ -164,6 +164,39 @@ class AppViewModel: ObservableObject {
         }
     }
 
+    func selectOnTV(contentId: String) async {
+        cancelRevert()
+        phase = .sending
+        sendStatus = "Connecting to Frame TV…"
+        errorMessage = nil
+        do {
+            let client = SamsungArtClient(host: tvIP, savedToken: savedToken)
+            tvLog = []
+            client.onRawMessage = { [weak self] raw in
+                let ts = DateFormatter.localizedString(from: Date(), dateStyle: .none, timeStyle: .medium)
+                Task { @MainActor [weak self] in self?.tvLog.append("[\(ts)] \(raw)") }
+            }
+            try await client.checkReachable()
+            try await client.connect()
+            if !client.token.isEmpty { savedToken = client.token }
+            sendStatus = "Selecting image…"
+            try await client.selectExisting(contentId)
+            if !uploadedContentIds.contains(contentId) {
+                uploadedContentIds = uploadedContentIds + [contentId]
+            }
+            phase = .done
+            sendStatus = "Displayed on Frame TV ✓"
+            if autoRevert { scheduleRevert(seconds: revertMinutes * 60) }
+            try await Task.sleep(nanoseconds: 4_000_000_000)
+            if phase == .done { phase = .ready; sendStatus = "" }
+        } catch {
+            errorMessage = "TV error: \(error.localizedDescription)"
+            sendStatus = ""
+            uploadProgress = 0
+            phase = .ready
+        }
+    }
+
     // MARK: Save to Photos
 
     func saveToPhotos(_ image: UIImage) async {

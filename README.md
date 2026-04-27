@@ -147,7 +147,7 @@ From the gallery you can:
 | Action | Description |
 |---|---|
 | **Load into editor** | Restores the prompt and image so you can resend or tweak |
-| **Send to TV** | Pushes the saved image directly to the Frame TV |
+| **Send to TV** | Re-displays the image on the Frame TV — skips upload if already on TV |
 | **Save to file / Photos** | macOS: NSSavePanel export; iOS: saves to Camera Roll |
 | **Delete** | Remove from gallery only, or from gallery *and* the TV |
 

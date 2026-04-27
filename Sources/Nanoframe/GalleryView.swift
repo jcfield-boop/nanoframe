@@ -92,6 +92,10 @@ struct GalleryView: View {
     }
 
     private func resend(_ item: GalleryItem) async {
+        if !item.contentId.isEmpty {
+            await vm.selectOnTV(contentId: item.contentId)
+            return
+        }
         load(item)
         await vm.sendToTV()
     }
@@ -190,12 +194,16 @@ struct ImageDetailView: View {
                 }
                 Button("Send to TV") {
                     Task {
-                        vm.prompt         = item.prompt
-                        vm.generatedImage = store.image(for: item)
-                        vm.imageData      = store.image(for: item)?.jpegData
-                        vm.phase          = .ready
                         dismiss()
-                        await vm.sendToTV()
+                        if !item.contentId.isEmpty {
+                            await vm.selectOnTV(contentId: item.contentId)
+                        } else {
+                            vm.prompt         = item.prompt
+                            vm.generatedImage = store.image(for: item)
+                            vm.imageData      = store.image(for: item)?.jpegData
+                            vm.phase          = .ready
+                            await vm.sendToTV()
+                        }
                     }
                 }
                 .buttonStyle(.borderedProminent)

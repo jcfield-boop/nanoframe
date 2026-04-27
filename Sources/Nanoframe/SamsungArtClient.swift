@@ -154,6 +154,16 @@ class SamsungArtClient: NSObject {
         return contentId
     }
 
+    /// Re-display an image that is already stored on the TV (no upload needed).
+    func selectExisting(_ contentId: String) async throws {
+        try await sendArtRequest([
+            "request":    "select_image",
+            "content_id": contentId,
+            "show":       true
+        ] as [String: Any])
+        disconnect()
+    }
+
     func disconnect() {
         webSocketTask?.cancel(with: .normalClosure, reason: nil)
         webSocketTask = nil

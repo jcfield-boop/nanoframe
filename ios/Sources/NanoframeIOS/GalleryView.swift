@@ -71,6 +71,10 @@ struct GalleryView: View {
     }
 
     private func resend(_ item: GalleryItem) async {
+        if !item.contentId.isEmpty {
+            await vm.selectOnTV(contentId: item.contentId)
+            return
+        }
         guard let jpeg = store.image(for: item)?.jpegData(compressionQuality: 0.95) else { return }
         vm.prompt = item.prompt
         vm.generatedImage = store.image(for: item)
@@ -201,12 +205,16 @@ struct ImageDetailView: View {
     }
 
     private func sendToTV() async {
+        dismiss()
+        if !item.contentId.isEmpty {
+            await vm.selectOnTV(contentId: item.contentId)
+            return
+        }
         guard let jpeg = store.image(for: item)?.jpegData(compressionQuality: 0.95) else { return }
         vm.prompt = item.prompt
         vm.generatedImage = store.image(for: item)
         vm.imageData = jpeg
         vm.phase = .ready
-        dismiss()
         await vm.sendToTV()
     }
 
