@@ -153,6 +153,12 @@ From the gallery you can:
 
 ---
 
+## App icon
+
+The macOS app icon is generated programmatically from `Sources/Nanoframe/Resources/AppIcon.icns` — a dark-background icon with a Samsung Frame TV outline, blue-gradient screen, and gold sparkle overlay. It ships at all required sizes (16 → 1024, including `@2x` Retina variants) and is installed automatically when you run the `/Applications` install step above.
+
+---
+
 ## Project layout
 
 ```
@@ -179,6 +185,7 @@ ios/
     SamsungArtClient.swift      Samsung Frame TV protocol (shared logic, no AppKit)
     ImageStore.swift            Local gallery persistence (UIImage version)
     GalleryView.swift           Gallery grid + image detail sheet (iOS)
+    SamsungArtClient.swift      Samsung Frame TV protocol (Swift 6-safe, no AppKit)
     Intents/
       ShowArtIntent.swift       Two Siri App Intents: show art + resume rotation
     Resources/
@@ -215,6 +222,12 @@ Key discoveries:
 ### Attributions
 
 Protocol behaviour was cross-referenced against the [**samsungtvws**](https://github.com/xchwarze/samsung-tv-ws-api) Python library, which provided the critical insight that `request_id` must equal `id` in every request — newer Frame TV firmware silently drops requests that omit it.
+
+---
+
+## Swift 6 compatibility
+
+The iOS `SamsungArtClient` uses `NWConnection` state callbacks that fire on arbitrary threads. All `CheckedContinuation` resumption is guarded by a small `Once` helper (`@unchecked Sendable`, `NSLock`-backed) so the continuation is resumed exactly once and there is no shared mutable state captured across concurrency domains. The build produces zero warnings under Swift 5.9 strict concurrency checking.
 
 ---
 

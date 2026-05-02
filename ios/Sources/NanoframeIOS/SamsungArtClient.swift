@@ -1,6 +1,19 @@
 import Foundation
 import Network
 
+/// Thread-safe one-shot gate: the first caller to `fire` wins; subsequent calls are no-ops.
+/// Used in NWConnection state handlers to ensure a CheckedContinuation is resumed exactly once.
+private final class Once: @unchecked Sendable {
+    private var fired = false
+    private let lock  = NSLock()
+    func fire(_ body: () -> Void) {
+        lock.lock(); defer { lock.unlock() }
+        guard !fired else { return }
+        fired = true
+        body()
+    }
+}
+
 enum ArtError: LocalizedError {
     case invalidURL
     case tvUnreachable
@@ -51,23 +64,19 @@ class SamsungArtClient: NSObject {
                 cont.resume(throwing: ArtError.invalidURL); return
             }
             let conn = NWConnection(host: NWEndpoint.Host(host), port: port, using: .tcp)
-            var resolved = false
+            let once = Once()
             conn.stateUpdateHandler = { state in
-                guard !resolved else { return }
                 switch state {
                 case .ready:
-                    resolved = true; conn.cancel(); cont.resume()
+                    once.fire { conn.cancel(); cont.resume() }
                 case .failed, .cancelled:
-                    resolved = true; conn.cancel()
-                    cont.resume(throwing: ArtError.tvUnreachable)
+                    once.fire { conn.cancel(); cont.resume(throwing: ArtError.tvUnreachable) }
                 default: break
                 }
             }
             conn.start(queue: .global())
             DispatchQueue.global().asyncAfter(deadline: .now() + 3) {
-                guard !resolved else { return }
-                resolved = true; conn.cancel()
-                cont.resume(throwing: ArtError.tvUnreachable)
+                once.fire { conn.cancel(); cont.resume(throwing: ArtError.tvUnreachable) }
             }
         }
     }
@@ -320,12 +329,12 @@ class SamsungArtClient: NSObject {
         let conn = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: .tcp)
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            var resolved = false
+            let once = Once()
             conn.stateUpdateHandler = { state in
-                guard !resolved else { return }
-                if case .ready = state { resolved = true; cont.resume() }
-                if case .failed(let e) = state {
-                    resolved = true; cont.resume(throwing: ArtError.uploadFailed(e.localizedDescription))
+                if case .ready = state {
+                    once.fire { cont.resume() }
+                } else if case .failed(let e) = state {
+                    once.fire { cont.resume(throwing: ArtError.uploadFailed(e.localizedDescription)) }
                 }
             }
             conn.start(queue: .global(qos: .userInitiated))
