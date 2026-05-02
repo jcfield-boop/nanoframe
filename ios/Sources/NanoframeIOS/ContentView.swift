@@ -145,7 +145,7 @@ class AppViewModel: ObservableObject {
                 uploadedContentIds = uploadedContentIds + [contentId]
             }
             // Save to local gallery
-            let galleryItem = ImageStore.shared.add(
+            _ = ImageStore.shared.add(
                 jpeg: upscaled,
                 prompt: prompt,
                 contentId: contentId
@@ -293,8 +293,9 @@ class AppViewModel: ObservableObject {
 
 struct ContentView: View {
     @EnvironmentObject var vm: AppViewModel
-    @State private var showSettings = false
-    @State private var showGallery  = false
+    @State private var showSettings    = false
+    @State private var showGallery     = false
+    @State private var savedToPhotos   = false
     @FocusState private var promptFocused: Bool
 
     var body: some View {
@@ -374,12 +375,22 @@ struct ContentView: View {
             HStack(spacing: 12) {
                 // Save to Photos
                 Button {
-                    Task { await vm.saveToPhotos(vm.generatedImage!) }
+                    Task {
+                        await vm.saveToPhotos(vm.generatedImage!)
+                        if vm.errorMessage == nil {
+                            savedToPhotos = true
+                            try? await Task.sleep(nanoseconds: 2_000_000_000)
+                            savedToPhotos = false
+                        }
+                    }
                 } label: {
-                    Label("Save", systemImage: "square.and.arrow.down")
+                    Label(savedToPhotos ? "Saved ✓" : "Save to Photos",
+                          systemImage: savedToPhotos ? "checkmark.circle.fill" : "square.and.arrow.down")
                         .font(.caption.bold())
+                        .foregroundStyle(savedToPhotos ? .green : .primary)
                 }
                 .buttonStyle(.bordered)
+                .disabled(savedToPhotos)
 
                 Spacer()
 
