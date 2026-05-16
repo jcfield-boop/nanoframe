@@ -118,7 +118,7 @@ struct DallEService {
 
         let body: [String: Any] = [
             "model": "dall-e-3", "prompt": prompt,
-            "n": 1, "size": "1792x1024", "quality": "hd", "response_format": "url"
+            "n": 1, "size": "1792x1024", "quality": "hd"
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
