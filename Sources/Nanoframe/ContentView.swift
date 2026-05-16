@@ -300,10 +300,27 @@ class AppViewModel: ObservableObject {
 
 struct ContentView: View {
     @StateObject private var vm = AppViewModel()
-    @State private var showSettings = false
-    @State private var showHelp     = false
-    @State private var showGallery  = false
+    @State private var showHelp    = false
+    @State private var showGallery = false
     @State private var server: RemoteTriggerServer?
+
+    // Opens Settings as a standalone NSWindow so it is never clipped by the main window.
+    private func openSettings() {
+        if let existing = NSApp.windows.first(where: { $0.title == "Settings" }) {
+            existing.makeKeyAndOrderFront(nil); return
+        }
+        let win = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 560),
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
+            backing: .buffered, defer: false
+        )
+        win.title = "Settings"
+        win.center()
+        win.contentView = NSHostingView(rootView: SettingsView(vm: vm))
+        win.setContentSize(NSSize(width: 460, height: 560))
+        win.minSize = NSSize(width: 420, height: 380)
+        win.makeKeyAndOrderFront(nil)
+    }
 
     var body: some View {
         HSplitView {
@@ -317,7 +334,6 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 900, minHeight: 600)
-        .sheet(isPresented: $showSettings) { SettingsView(vm: vm) }
         .sheet(isPresented: $showHelp)     { HelpView() }
         .sheet(isPresented: $showGallery)  { GalleryView(vm: vm) }
         .alert("Error", isPresented: Binding(get: { vm.errorMessage != nil },
@@ -493,10 +509,10 @@ struct ContentView: View {
                 Button { showGallery  = true } label: { Image(systemName: "photo.on.rectangle") }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
                     .help("Gallery")
-                Button { showHelp     = true } label: { Image(systemName: "questionmark.circle") }
+                Button { showHelp = true } label: { Image(systemName: "questionmark.circle") }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
                     .help("Help")
-                Button { showSettings = true } label: { Image(systemName: "gear") }
+                Button { openSettings() } label: { Image(systemName: "gear") }
                     .buttonStyle(.plain).foregroundStyle(.secondary)
                     .help("Settings")
             }
@@ -619,21 +635,8 @@ struct SettingsView: View {
     var showDebugLog:   Binding<Bool>          { Binding(get: { vm.showDebugLog   }, set: { vm.showDebugLog   = $0 }) }
 
     var body: some View {
-        VStack(spacing: 0) {
-            // Fixed header
-            HStack {
-                Text("Settings").font(.title2.bold())
-                Spacer()
-                Button("Done") { dismiss() }.buttonStyle(.borderedProminent)
-            }
-            .padding(.horizontal, 24)
-            .padding(.top, 20)
-            .padding(.bottom, 12)
-
-            Divider()
-
-            // Scrollable content
-            ScrollView {
+        // Scrollable content — window chrome provides the close button
+        ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
 
                     GroupBox {
@@ -727,8 +730,6 @@ struct SettingsView: View {
                     } label: { Label("Samsung Frame TV", systemImage: "tv") }
                 }
                 .padding(24)
-            }
         }
-        .frame(minWidth: 440, idealWidth: 460, minHeight: 400, idealHeight: 560)
     }
 }
