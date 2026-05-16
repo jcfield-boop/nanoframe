@@ -619,100 +619,116 @@ struct SettingsView: View {
     var showDebugLog:   Binding<Bool>          { Binding(get: { vm.showDebugLog   }, set: { vm.showDebugLog   = $0 }) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text("Settings").font(.title2.bold())
+        VStack(spacing: 0) {
+            // Fixed header
+            HStack {
+                Text("Settings").font(.title2.bold())
+                Spacer()
+                Button("Done") { dismiss() }.buttonStyle(.borderedProminent)
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 20)
+            .padding(.bottom, 12)
 
-            GroupBox {
-                VStack(alignment: .leading, spacing: 10) {
-                    Picker("Provider", selection: provider) {
-                        ForEach(ImageProvider.allCases, id: \.self) { Text($0.displayName).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
+            Divider()
 
-                    switch vm.provider {
-                    case .pollinations:
-                        Label("No API key required — just generate!", systemImage: "checkmark.circle.fill")
-                            .font(.caption).foregroundStyle(.green)
-                    case .nanoBanana:
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Nano Banana API Key").font(.caption).foregroundStyle(.secondary)
-                            SecureField("nb_…", text: nbKey).textFieldStyle(.roundedBorder)
-                            Link("Get a key → nanobanana.expert",
-                                 destination: URL(string: "https://nanobanana.expert")!)
-                                .font(.caption2)
-                        }
-                    case .gptImage1:
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("OpenAI API Key").font(.caption).foregroundStyle(.secondary)
-                            SecureField("sk-…", text: apiKey).textFieldStyle(.roundedBorder)
-                            Text("Native 1536×1024 landscape · returns b64 · quality: high")
-                                .font(.caption2).foregroundStyle(.secondary)
-                        }
-                    case .openAI:
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("OpenAI API Key").font(.caption).foregroundStyle(.secondary)
-                            SecureField("sk-…", text: apiKey).textFieldStyle(.roundedBorder)
-                            Text("DALL·E 3 · 1792×1024 upscaled to 4K")
-                                .font(.caption2).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                .padding(4)
-            } label: { Label("Image Generation", systemImage: "wand.and.stars") }
+            // Scrollable content
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
 
-            GroupBox {
-                VStack(alignment: .leading, spacing: 8) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("TV IP Address").font(.caption).foregroundStyle(.secondary)
-                        TextField("192.168.0.24", text: tvIP).textFieldStyle(.roundedBorder)
-                    }
-                    Divider()
-                    Toggle(isOn: autoRevert) {
-                        Text("Auto-revert to art rotation").font(.caption)
-                    }
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-
-                    if vm.autoRevert {
-                        HStack {
-                            Text("Revert after").font(.caption).foregroundStyle(.secondary)
-                            Spacer()
-                            Picker("", selection: revertMinutes) {
-                                Text("5 min").tag(5)
-                                Text("10 min").tag(10)
-                                Text("15 min").tag(15)
-                                Text("30 min").tag(30)
-                                Text("1 hour").tag(60)
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Picker("Provider", selection: provider) {
+                                ForEach(ImageProvider.allCases, id: \.self) { Text($0.displayName).tag($0) }
                             }
-                            .labelsHidden()
-                            .frame(width: 90)
-                        }
-                        .transition(.opacity.combined(with: .move(edge: .top)))
-                    }
+                            .pickerStyle(.segmented)
 
-                    Toggle(isOn: deleteOnRevert) {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("Delete AI images on revert").font(.caption)
-                            Text("Off = keep in My Photos as a gallery")
+                            switch vm.provider {
+                            case .pollinations:
+                                Label("No API key required — just generate!", systemImage: "checkmark.circle.fill")
+                                    .font(.caption).foregroundStyle(.green)
+                            case .nanoBanana:
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("Nano Banana API Key").font(.caption).foregroundStyle(.secondary)
+                                    SecureField("nb_…", text: nbKey).textFieldStyle(.roundedBorder)
+                                    Link("Get a key → nanobanana.expert",
+                                         destination: URL(string: "https://nanobanana.expert")!)
+                                        .font(.caption2)
+                                }
+                            case .gptImage1:
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("OpenAI API Key").font(.caption).foregroundStyle(.secondary)
+                                    SecureField("sk-…", text: apiKey).textFieldStyle(.roundedBorder)
+                                    Text("GPT Image 1 · native 1536×1024 landscape · quality: high")
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
+                            case .openAI:
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text("OpenAI API Key").font(.caption).foregroundStyle(.secondary)
+                                    SecureField("sk-…", text: apiKey).textFieldStyle(.roundedBorder)
+                                    Text("DALL·E 3 · 1792×1024 upscaled to 4K")
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        .padding(4)
+                    } label: { Label("Image Generation", systemImage: "wand.and.stars") }
+
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 8) {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text("TV IP Address").font(.caption).foregroundStyle(.secondary)
+                                TextField("192.168.0.24", text: tvIP).textFieldStyle(.roundedBorder)
+                            }
+                            Divider()
+                            Toggle(isOn: autoRevert) {
+                                Text("Auto-revert to art rotation").font(.caption)
+                            }
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+
+                            if vm.autoRevert {
+                                HStack {
+                                    Text("Revert after").font(.caption).foregroundStyle(.secondary)
+                                    Spacer()
+                                    Picker("", selection: revertMinutes) {
+                                        Text("5 min").tag(5)
+                                        Text("10 min").tag(10)
+                                        Text("15 min").tag(15)
+                                        Text("30 min").tag(30)
+                                        Text("1 hour").tag(60)
+                                    }
+                                    .labelsHidden()
+                                    .frame(width: 90)
+                                }
+                                .transition(.opacity.combined(with: .move(edge: .top)))
+                            }
+
+                            Toggle(isOn: deleteOnRevert) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text("Delete AI images on revert").font(.caption)
+                                    Text("Off = keep in My Photos as a gallery")
+                                        .font(.caption2).foregroundStyle(.secondary)
+                                }
+                            }
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+
+                            Toggle(isOn: showDebugLog) {
+                                Text("Show TV debug log panel").font(.caption)
+                            }
+                            .toggleStyle(.switch)
+                            .controlSize(.small)
+
+                            Text("Lango trigger server: 0.0.0.0:11436")
                                 .font(.caption2).foregroundStyle(.secondary)
                         }
-                    }
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    Toggle(isOn: showDebugLog) {
-                        Text("Show TV debug log panel").font(.caption)
-                    }
-                    .toggleStyle(.switch)
-                    .controlSize(.small)
-                    Text("Lango trigger server: 0.0.0.0:11436")
-                        .font(.caption2).foregroundStyle(.secondary)
+                        .padding(4)
+                    } label: { Label("Samsung Frame TV", systemImage: "tv") }
                 }
-                .padding(4)
-            } label: { Label("Samsung Frame TV", systemImage: "tv") }
-
-            HStack { Spacer(); Button("Done") { dismiss() }.buttonStyle(.borderedProminent) }
+                .padding(24)
+            }
         }
-        .padding(24)
-        .frame(width: 420)
+        .frame(minWidth: 440, idealWidth: 460, minHeight: 400, idealHeight: 560)
     }
 }
