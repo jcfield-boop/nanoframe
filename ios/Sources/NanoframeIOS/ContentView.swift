@@ -17,33 +17,35 @@ class AppViewModel: ObservableObject {
     @Published var revertAt: Date? = nil
 
     // MARK: Persisted settings
+    // @Published so SwiftUI re-renders when picker/toggle values change.
+    // didSet syncs back to UserDefaults for persistence across launches.
+
+    @Published var provider: ImageProvider = {
+        ImageProvider(rawValue: UserDefaults.standard.string(forKey: "image_provider") ?? "") ?? .pollinations
+    }() { didSet { UserDefaults.standard.set(provider.rawValue, forKey: "image_provider") } }
+
+    @Published var autoRevert: Bool = {
+        UserDefaults.standard.object(forKey: "auto_revert") == nil
+            ? true : UserDefaults.standard.bool(forKey: "auto_revert")
+    }() { didSet { UserDefaults.standard.set(autoRevert, forKey: "auto_revert") } }
+
+    @Published var revertMinutes: Int = {
+        let v = UserDefaults.standard.integer(forKey: "revert_minutes"); return v == 0 ? 10 : v
+    }() { didSet { UserDefaults.standard.set(revertMinutes, forKey: "revert_minutes") } }
+
+    @Published var deleteOnRevert: Bool = {
+        UserDefaults.standard.object(forKey: "delete_on_revert") == nil
+            ? false : UserDefaults.standard.bool(forKey: "delete_on_revert")
+    }() { didSet { UserDefaults.standard.set(deleteOnRevert, forKey: "delete_on_revert") } }
+
+    @Published var showDebugLog: Bool = {
+        UserDefaults.standard.object(forKey: "show_debug_log") == nil
+            ? false : UserDefaults.standard.bool(forKey: "show_debug_log")
+    }() { didSet { UserDefaults.standard.set(showDebugLog, forKey: "show_debug_log") } }
 
     var uploadedContentIds: [String] {
         get { UserDefaults.standard.stringArray(forKey: "nanoframe_content_ids") ?? [] }
         set { UserDefaults.standard.set(newValue, forKey: "nanoframe_content_ids") }
-    }
-    var deleteOnRevert: Bool {
-        get { UserDefaults.standard.object(forKey: "delete_on_revert") == nil
-                ? false : UserDefaults.standard.bool(forKey: "delete_on_revert") }
-        set { UserDefaults.standard.set(newValue, forKey: "delete_on_revert") }
-    }
-    var autoRevert: Bool {
-        get { UserDefaults.standard.object(forKey: "auto_revert") == nil
-                ? true : UserDefaults.standard.bool(forKey: "auto_revert") }
-        set { UserDefaults.standard.set(newValue, forKey: "auto_revert") }
-    }
-    var revertMinutes: Int {
-        get { let v = UserDefaults.standard.integer(forKey: "revert_minutes"); return v == 0 ? 10 : v }
-        set { UserDefaults.standard.set(newValue, forKey: "revert_minutes") }
-    }
-    var showDebugLog: Bool {
-        get { UserDefaults.standard.object(forKey: "show_debug_log") == nil
-                ? false : UserDefaults.standard.bool(forKey: "show_debug_log") }
-        set { UserDefaults.standard.set(newValue, forKey: "show_debug_log") }
-    }
-    var provider: ImageProvider {
-        get { ImageProvider(rawValue: UserDefaults.standard.string(forKey: "image_provider") ?? "") ?? .pollinations }
-        set { UserDefaults.standard.set(newValue.rawValue, forKey: "image_provider") }
     }
     var apiKey: String {
         get { UserDefaults.standard.string(forKey: "openai_api_key") ?? "" }
