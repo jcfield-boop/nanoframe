@@ -30,7 +30,7 @@ class AppViewModel: ObservableObject {
         var label: String {
             switch self {
             case .idle:       return "Enter a prompt to begin"
-            case .generating: return "Generating with DALL·E 3…"
+            case .generating: return "Generating image…"
             case .ready:      return "Image ready — send to TV?"
             case .sending:    return "Uploading to Frame TV…"
             case .done:       return "Now displaying on Frame TV"
@@ -95,10 +95,10 @@ class AppViewModel: ObservableObject {
 
     var activeKey: String {
         switch provider {
-        case .pollinations: return "free"
-        case .nanoBanana:   return nbKey
-        case .gptImage1:    return apiKey
-        case .openAI:       return apiKey
+        case .pollinations:  return "free"
+        case .nanoBanana:    return nbKey
+        case .gptImage1:     return apiKey
+        case .gptImage1Mini: return apiKey
         }
     }
 
@@ -662,14 +662,14 @@ struct SettingsView: View {
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("OpenAI API Key").font(.caption).foregroundStyle(.secondary)
                                     SecureField("sk-…", text: apiKey).textFieldStyle(.roundedBorder)
-                                    Text("GPT Image 1 · native 1536×1024 landscape · quality: high")
+                                    Text("GPT Image 1 · 1536×1024 · quality: high")
                                         .font(.caption2).foregroundStyle(.secondary)
                                 }
-                            case .openAI:
+                            case .gptImage1Mini:
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("OpenAI API Key").font(.caption).foregroundStyle(.secondary)
                                     SecureField("sk-…", text: apiKey).textFieldStyle(.roundedBorder)
-                                    Text("DALL·E 3 · 1792×1024 upscaled to 4K")
+                                    Text("GPT Image 1 Mini · 1536×1024 · faster & cheaper")
                                         .font(.caption2).foregroundStyle(.secondary)
                                 }
                             }

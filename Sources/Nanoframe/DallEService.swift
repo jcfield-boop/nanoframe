@@ -8,17 +8,17 @@ struct ImageGenError: LocalizedError {
 }
 
 enum ImageProvider: String, CaseIterable {
-    case pollinations = "pollinations"
-    case nanoBanana   = "nano-banana"
-    case gptImage1    = "gpt-image-1"
-    case openAI       = "openai"
+    case pollinations  = "pollinations"
+    case nanoBanana    = "nano-banana"
+    case gptImage1     = "gpt-image-1"
+    case gptImage1Mini = "gpt-image-1-mini"
 
     var displayName: String {
         switch self {
-        case .pollinations: return "Pollinations (free, no key)"
-        case .nanoBanana:   return "Nano Banana"
-        case .gptImage1:    return "GPT Image 1 (OpenAI)"
-        case .openAI:       return "DALL·E 3 (OpenAI)"
+        case .pollinations:  return "Pollinations (free)"
+        case .nanoBanana:    return "Nano Banana"
+        case .gptImage1:     return "GPT Image 1 (OpenAI)"
+        case .gptImage1Mini: return "GPT Image 1 Mini (OpenAI)"
         }
     }
 
@@ -32,10 +32,10 @@ struct DallEService {
     func generate(prompt: String, apiKey: String, provider: ImageProvider) async throws -> (jpeg: Data, image: NSImage) {
         let enhanced = Self.enhanceForFrameTV(prompt)
         switch provider {
-        case .pollinations: return try await pollinations(prompt: enhanced)
-        case .nanoBanana:   return try await nanoBanana(prompt: enhanced, apiKey: apiKey)
-        case .gptImage1:    return try await gptImage1(prompt: enhanced, apiKey: apiKey)
-        case .openAI:       return try await openAI(prompt: enhanced, apiKey: apiKey)
+        case .pollinations:  return try await pollinations(prompt: enhanced)
+        case .nanoBanana:    return try await nanoBanana(prompt: enhanced, apiKey: apiKey)
+        case .gptImage1:     return try await gptImageGen(prompt: enhanced, apiKey: apiKey, model: "gpt-image-1")
+        case .gptImage1Mini: return try await gptImageGen(prompt: enhanced, apiKey: apiKey, model: "gpt-image-1-mini")
         }
     }
 
@@ -108,9 +108,10 @@ struct DallEService {
         return try decode(imageData)
     }
 
-    // MARK: - GPT Image 1 (returns base64, native 1536×1024 landscape)
+    // MARK: - GPT Image (gpt-image-1 and gpt-image-1-mini)
+    // Both return b64_json at 1536×1024 landscape. Mini uses medium quality.
 
-    private func gptImage1(prompt: String, apiKey: String) async throws -> (jpeg: Data, image: NSImage) {
+    private func gptImageGen(prompt: String, apiKey: String, model: String) async throws -> (jpeg: Data, image: NSImage) {
         let url = URL(string: "https://api.openai.com/v1/images/generations")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -118,11 +119,11 @@ struct DallEService {
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
 
         let body: [String: Any] = [
-            "model":              "gpt-image-1",
+            "model":              model,
             "prompt":             prompt,
             "n":                  1,
-            "size":               "1536x1024",   // native landscape — closest to 16:9
-            "quality":            "high",
+            "size":               "1536x1024",
+            "quality":            model.hasSuffix("mini") ? "medium" : "high",
             "output_format":      "jpeg",
             "output_compression": 92
         ]
@@ -131,41 +132,12 @@ struct DallEService {
         let (data, response) = try await URLSession.shared.data(for: req)
         try checkHTTP(response, data: data)
 
-        // gpt-image-1 always returns b64_json
         struct Resp: Decodable { struct Item: Decodable { let b64_json: String }; let data: [Item] }
         let result = try JSONDecoder().decode(Resp.self, from: data)
         guard let b64 = result.data.first?.b64_json,
               let imageData = Data(base64Encoded: b64) else {
-            throw ImageGenError(message: "No image data in GPT Image 1 response")
+            throw ImageGenError(message: "No image data in \(model) response")
         }
-        return try decode(imageData)
-    }
-
-    // MARK: - OpenAI DALL·E 3
-
-    private func openAI(prompt: String, apiKey: String) async throws -> (jpeg: Data, image: NSImage) {
-        let url = URL(string: "https://api.openai.com/v1/images/generations")!
-        var req = URLRequest(url: url)
-        req.httpMethod = "POST"
-        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-
-        let body: [String: Any] = [
-            "model": "dall-e-3", "prompt": prompt,
-            "n": 1, "size": "1792x1024", "quality": "hd"
-        ]
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let (data, response) = try await URLSession.shared.data(for: req)
-        try checkHTTP(response, data: data)
-
-        struct Resp: Decodable { struct Item: Decodable { let url: String }; let data: [Item] }
-        let result = try JSONDecoder().decode(Resp.self, from: data)
-        guard let urlStr = result.data.first?.url, let imageURL = URL(string: urlStr) else {
-            throw ImageGenError(message: "No image URL in DALL·E response")
-        }
-
-        let (imageData, _) = try await URLSession.shared.data(from: imageURL)
         return try decode(imageData)
     }
 
