@@ -85,6 +85,7 @@ class AppViewModel: ObservableObject {
         switch provider {
         case .pollinations: return "free"
         case .nanoBanana:   return nbKey
+        case .gptImage1:    return apiKey
         case .openAI:       return apiKey
         }
     }
@@ -573,7 +574,7 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.menu)
 
-                    if vm.provider == .openAI {
+                    if vm.provider == .openAI || vm.provider == .gptImage1 {
                         SecureField("OpenAI key (sk-…)", text: Binding(
                             get: { vm.apiKey }, set: { vm.apiKey = $0 }
                         ))

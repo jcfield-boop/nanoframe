@@ -10,12 +10,14 @@ struct ImageGenError: LocalizedError {
 enum ImageProvider: String, CaseIterable {
     case pollinations = "pollinations"
     case nanoBanana   = "nano-banana"
+    case gptImage1    = "gpt-image-1"
     case openAI       = "openai"
 
     var displayName: String {
         switch self {
         case .pollinations: return "Pollinations (free, no key)"
         case .nanoBanana:   return "Nano Banana"
+        case .gptImage1:    return "GPT Image 1 (OpenAI)"
         case .openAI:       return "DALL·E 3 (OpenAI)"
         }
     }
@@ -32,6 +34,7 @@ struct DallEService {
         switch provider {
         case .pollinations: return try await pollinations(prompt: enhanced)
         case .nanoBanana:   return try await nanoBanana(prompt: enhanced, apiKey: apiKey)
+        case .gptImage1:    return try await gptImage1(prompt: enhanced, apiKey: apiKey)
         case .openAI:       return try await openAI(prompt: enhanced, apiKey: apiKey)
         }
     }
@@ -51,7 +54,7 @@ struct DallEService {
     func upscaleTo4K(_ jpegData: Data) -> Data? {
         guard let ci = CIImage(data: jpegData) else { return nil }
         let src = ci.extent.size
-        guard src.width < 3000 else { return jpegData }   // already 4K, skip
+        guard src.width < 3000 else { return jpegData }   // already large enough, skip
 
         let scaled = ci.transformed(by: CGAffineTransform(
             scaleX: 3840.0 / src.width,
@@ -104,6 +107,39 @@ struct DallEService {
         }
 
         let (imageData, _) = try await URLSession.shared.data(from: imageURL)
+        return try decode(imageData)
+    }
+
+    // MARK: - GPT Image 1 (returns base64, native 1536×1024 landscape)
+
+    private func gptImage1(prompt: String, apiKey: String) async throws -> (jpeg: Data, image: UIImage) {
+        let url = URL(string: "https://api.openai.com/v1/images/generations")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        let body: [String: Any] = [
+            "model":           "gpt-image-1",
+            "prompt":          prompt,
+            "n":               1,
+            "size":            "1536x1024",   // native landscape — closest to 16:9
+            "quality":         "high",
+            "output_format":   "jpeg",
+            "output_compression": 92
+        ]
+        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        let (data, response) = try await URLSession.shared.data(for: req)
+        try checkHTTP(response, data: data)
+
+        // gpt-image-1 always returns b64_json
+        struct Resp: Decodable { struct Item: Decodable { let b64_json: String }; let data: [Item] }
+        let result = try JSONDecoder().decode(Resp.self, from: data)
+        guard let b64 = result.data.first?.b64_json,
+              let imageData = Data(base64Encoded: b64) else {
+            throw ImageGenError(message: "No image data in GPT Image 1 response")
+        }
         return try decode(imageData)
     }
 

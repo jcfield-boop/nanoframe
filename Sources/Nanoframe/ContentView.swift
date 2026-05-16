@@ -107,6 +107,7 @@ class AppViewModel: ObservableObject {
         switch provider {
         case .pollinations: return "free"
         case .nanoBanana:   return nbKey
+        case .gptImage1:    return apiKey
         case .openAI:       return apiKey
         }
     }
@@ -650,10 +651,19 @@ struct SettingsView: View {
                                  destination: URL(string: "https://nanobanana.expert")!)
                                 .font(.caption2)
                         }
+                    case .gptImage1:
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("OpenAI API Key").font(.caption).foregroundStyle(.secondary)
+                            SecureField("sk-…", text: apiKey).textFieldStyle(.roundedBorder)
+                            Text("Native 1536×1024 landscape · returns b64 · quality: high")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
                     case .openAI:
                         VStack(alignment: .leading, spacing: 4) {
                             Text("OpenAI API Key").font(.caption).foregroundStyle(.secondary)
                             SecureField("sk-…", text: apiKey).textFieldStyle(.roundedBorder)
+                            Text("DALL·E 3 · 1792×1024 upscaled to 4K")
+                                .font(.caption2).foregroundStyle(.secondary)
                         }
                     }
                 }
