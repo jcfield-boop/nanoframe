@@ -1,6 +1,6 @@
 # Nanoframe — Build Specification
 
-A prompt-to-TV app: the user types (or speaks) a description, an AI image model generates the artwork, and the app pushes it directly to a Samsung Frame TV over the local network. Two native platforms: **macOS 14+** (Swift Package) and **iOS 16+** (Xcode project via xcodegen).
+A prompt-to-TV app: the user types (or speaks) a description, an AI image model generates the artwork, and the app pushes it directly to a Samsung Frame TV over the local network. Three native platforms: **macOS 14+** (Swift Package), **iOS 16+** (Xcode project via xcodegen), and **Android 8+** (Kotlin + Jetpack Compose + Gradle).
 
 ---
 
@@ -481,6 +481,518 @@ After running `xcodegen generate`, manually add the **Siri** capability in Xcode
 | Deletion event | `image_list_deleted` (plural), not `image_deleted` |
 | Upload port | Provided as a **string** in `conn_info.port`, not a number |
 | Token | Assigned per-session by the TV on first connect; save and reuse |
+
+---
+
+## Android
+
+### Platform overview
+
+| Concept | Android equivalent |
+|---|---|
+| Swift / SwiftUI | Kotlin / Jetpack Compose |
+| Swift Package Manager | Gradle (Kotlin DSL) |
+| URLSession | OkHttp 4 |
+| URLSession WebSocket | OkHttp `WebSocket` |
+| NWConnection (TCP) | `java.net.Socket` |
+| NSImage / UIImage / CIImage | `android.graphics.Bitmap` / `BitmapFactory` |
+| UserDefaults | `SharedPreferences` (via `DataStore<Preferences>` recommended) |
+| PHPhotoLibrary | `MediaStore` API |
+| BGTaskScheduler | `WorkManager` |
+| Siri App Intents | Google Assistant `AppActionsExtension` (or Android Shortcuts API) |
+| `@Published ObservableObject` | `ViewModel` + `StateFlow<UiState>` |
+| `NSHostingView` (standalone window) | Activity / Dialog Fragment |
+| `xcodegen` + `project.yml` | Standard `build.gradle.kts` |
+
+Minimum SDK: **26** (Android 8.0 Oreo). Target SDK: 35+.
+
+---
+
+### Project structure
+
+```
+app/
+  build.gradle.kts
+  src/main/
+    AndroidManifest.xml
+    java/com/nanoframe/
+      MainActivity.kt              Entry point, NavHost
+      ui/
+        MainScreen.kt              Prompt input + Generate + Send buttons
+        GalleryScreen.kt           LazyVerticalGrid gallery
+        SettingsScreen.kt          Settings composable
+      viewmodel/
+        AppViewModel.kt            ViewModel + UiState StateFlow
+      service/
+        ImageGenService.kt         All 4 image providers (OkHttp)
+        SamsungArtClient.kt        WebSocket + TCP upload client
+        ImageStore.kt              Gallery persistence
+      worker/
+        RevertWorker.kt            WorkManager Worker for background revert
+      intents/
+        ShowArtAction.kt           Google Assistant action handler
+    res/
+      drawable/                    Vector icons
+      mipmap-*/                    App icon densities (48/72/96/144/192 dp)
+      values/
+        strings.xml
+        themes.xml                 Material3 theme
+```
+
+---
+
+### Gradle dependencies (`build.gradle.kts`)
+
+```kotlin
+dependencies {
+    // Compose BOM
+    implementation(platform("androidx.compose:compose-bom:2024.05.00"))
+    implementation("androidx.compose.ui:ui")
+    implementation("androidx.compose.material3:material3")
+    implementation("androidx.activity:activity-compose:1.9.0")
+    implementation("androidx.navigation:navigation-compose:2.7.7")
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.0")
+
+    // Networking
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+
+    // Image display
+    implementation("io.coil-kt:coil-compose:2.6.0")
+
+    // Persistence
+    implementation("androidx.datastore:datastore-preferences:1.1.1")
+
+    // Background work
+    implementation("androidx.work:work-runtime-ktx:2.9.0")
+}
+```
+
+---
+
+### AndroidManifest.xml — required entries
+
+```xml
+<uses-permission android:name="android.permission.INTERNET" />
+<uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+    android:maxSdkVersion="28" />
+<uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+
+<application ...>
+    <!-- WorkManager provider — required for WorkManager to initialise -->
+    <provider
+        android:name="androidx.startup.InitializationProvider"
+        android:authorities="${applicationId}.androidx-startup"
+        android:exported="false">
+        <meta-data android:name="androidx.work.impl.WorkManagerInitializer"
+            android:value="androidx.startup" />
+    </provider>
+
+    <!-- Google Assistant action (optional) -->
+    <meta-data
+        android:name="com.google.android.actions"
+        android:resource="@xml/actions" />
+</application>
+```
+
+For local network access (Samsung TV on LAN) no additional permission is needed on Android; the `INTERNET` permission covers LAN sockets.
+
+---
+
+### AppViewModel
+
+```kotlin
+data class UiState(
+    val prompt: String = "",
+    val bitmap: Bitmap? = null,
+    val jpegBytes: ByteArray? = null,
+    val phase: Phase = Phase.Idle,
+    val errorMessage: String? = null,
+    val sendStatus: String = "",
+    val uploadProgress: Float = 0f,
+    val revertAt: Instant? = null
+)
+
+enum class Phase { Idle, Generating, Ready, Sending, Done }
+
+class AppViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val prefs = PreferenceManager.getDefaultSharedPreferences(application)
+    private val _state = MutableStateFlow(UiState())
+    val state: StateFlow<UiState> = _state.asStateFlow()
+
+    // Settings backed by SharedPreferences
+    var provider: ImageProvider
+        get() = ImageProvider.fromRaw(prefs.getString("image_provider", "pollinations")!!)
+        set(v) { prefs.edit { putString("image_provider", v.raw) } }
+
+    var autoRevert: Boolean
+        get() = prefs.getBoolean("auto_revert", true)
+        set(v) { prefs.edit { putBoolean("auto_revert", v) } }
+
+    var revertMinutes: Int
+        get() = prefs.getInt("revert_minutes", 10)
+        set(v) { prefs.edit { putInt("revert_minutes", v) } }
+
+    // ... tvIP, apiKey, etc.
+
+    fun generate() {
+        viewModelScope.launch {
+            _state.update { it.copy(phase = Phase.Generating, errorMessage = null) }
+            runCatching {
+                val svc = ImageGenService()
+                val (jpeg, bitmap) = svc.generate(
+                    prompt = state.value.prompt,
+                    apiKey  = activeApiKey(),
+                    provider = provider
+                )
+                _state.update { it.copy(phase = Phase.Ready, jpegBytes = jpeg, bitmap = bitmap) }
+            }.onFailure { e ->
+                _state.update { it.copy(phase = Phase.Idle, errorMessage = e.message) }
+            }
+        }
+    }
+
+    fun sendToTV() {
+        viewModelScope.launch {
+            _state.update { it.copy(phase = Phase.Sending) }
+            runCatching {
+                val jpeg     = upscaleTo4K(state.value.jpegBytes!!) ?: state.value.jpegBytes!!
+                val client   = SamsungArtClient(tvIP, prefs.getString("samsung_tv_token","")!!)
+                client.checkReachable()
+                client.connect()
+                if (client.token.isNotEmpty()) prefs.edit { putString("samsung_tv_token", client.token) }
+                val contentId = client.uploadAndDisplay(jpeg) { progress ->
+                    _state.update { it.copy(uploadProgress = progress) }
+                }
+                ImageStore(getApplication()).add(jpeg, state.value.prompt, contentId)
+                _state.update { it.copy(phase = Phase.Done, sendStatus = "On TV!") }
+                if (autoRevert) scheduleRevert(revertMinutes * 60)
+            }.onFailure { e ->
+                _state.update { it.copy(phase = Phase.Ready, errorMessage = e.message) }
+            }
+        }
+    }
+}
+```
+
+**Important**: Jetpack Compose re-renders on `StateFlow` collection, but individual settings fields backed by `SharedPreferences` are **not** observable. For the Settings screen use a `SettingsViewModel` that holds `MutableStateFlow` for each field and writes through to `SharedPreferences` in `set` — same principle as the `@Published var … { didSet }` pattern on iOS.
+
+---
+
+### ImageGenService (Kotlin/OkHttp)
+
+All 4 providers use `OkHttpClient` with a 60s timeout. Apply the same Frame TV prompt enhancement suffix as the Swift version.
+
+```kotlin
+class ImageGenService {
+    private val client = OkHttpClient.Builder()
+        .callTimeout(60, TimeUnit.SECONDS)
+        .build()
+
+    suspend fun generate(prompt: String, apiKey: String, provider: ImageProvider): Pair<ByteArray, Bitmap> =
+        withContext(Dispatchers.IO) {
+            val enhanced = enhanceForFrameTV(prompt)
+            when (provider) {
+                ImageProvider.POLLINATIONS   -> pollinations(enhanced)
+                ImageProvider.NANO_BANANA    -> nanoBanana(enhanced, apiKey)
+                ImageProvider.GPT_IMAGE_1    -> gptImageGen(enhanced, apiKey, "gpt-image-1")
+                ImageProvider.GPT_IMAGE_MINI -> gptImageGen(enhanced, apiKey, "gpt-image-1-mini")
+            }
+        }
+
+    private fun pollinations(prompt: String): Pair<ByteArray, Bitmap> {
+        val seed = (1..999_999).random()
+        val url  = "https://image.pollinations.ai/prompt/${prompt.urlEncode()}" +
+                   "?width=1792&height=1024&model=flux&nologo=true&seed=$seed"
+        val bytes = client.newCall(Request.Builder().url(url).build()).execute()
+            .use { check(it.isSuccessful); it.body!!.bytes() }
+        return Pair(bytes, BitmapFactory.decodeByteArray(bytes, 0, bytes.size)!!)
+    }
+
+    private fun gptImageGen(prompt: String, apiKey: String, model: String): Pair<ByteArray, Bitmap> {
+        val quality = if (model.endsWith("mini")) "medium" else "high"
+        val body = JSONObject().apply {
+            put("model", model); put("prompt", prompt); put("n", 1)
+            put("size", "1536x1024"); put("quality", quality)
+            put("output_format", "jpeg"); put("output_compression", 92)
+        }.toString().toRequestBody("application/json".toMediaType())
+        val resp = client.newCall(
+            Request.Builder()
+                .url("https://api.openai.com/v1/images/generations")
+                .header("Authorization", "Bearer $apiKey")
+                .post(body).build()
+        ).execute().use { check(it.isSuccessful); it.body!!.string() }
+        val b64   = JSONObject(resp).getJSONArray("data").getJSONObject(0).getString("b64_json")
+        val bytes = Base64.decode(b64, Base64.DEFAULT)
+        return Pair(bytes, BitmapFactory.decodeByteArray(bytes, 0, bytes.size)!!)
+    }
+    // nanoBanana: same POST pattern as Swift version; same response shape { image_url }
+}
+```
+
+---
+
+### SamsungArtClient (Kotlin/OkHttp WebSocket)
+
+The WebSocket envelope, request_id requirement, TCP wire format, and revert logic are **identical** to the Swift version (see [Samsung Frame TV protocol](#samsung-frame-tv-protocol) above). Only the implementation language differs.
+
+```kotlin
+class SamsungArtClient(private val host: String, private var savedToken: String) {
+    private val client = OkHttpClient.Builder()
+        .readTimeout(0, TimeUnit.MILLISECONDS) // keep alive for WebSocket
+        .hostnameVerifier { _, _ -> true }     // TV uses self-signed cert
+        .build()
+
+    var token = savedToken
+    private var ws: WebSocket? = null
+    private val messages = Channel<String>(Channel.UNLIMITED)
+
+    suspend fun connect() = withContext(Dispatchers.IO) {
+        val name = Base64.encodeToString("Nanoframe".toByteArray(), Base64.NO_WRAP)
+        val url  = buildString {
+            append("wss://$host:8002/api/v2/channels/com.samsung.art-app")
+            append("?name=$name")
+            if (savedToken.isNotEmpty()) append("&token=$savedToken")
+        }
+        suspendCancellableCoroutine { cont ->
+            val listener = object : WebSocketListener() {
+                override fun onOpen(ws: WebSocket, r: Response) {
+                    this@SamsungArtClient.ws = ws
+                    cont.resume(Unit)
+                }
+                override fun onMessage(ws: WebSocket, text: String) {
+                    messages.trySend(text)
+                    // Parse token from data.token on first message
+                    runCatching {
+                        val d = JSONObject(text).getJSONObject("data")
+                        if (d.has("token")) token = d.getString("token")
+                    }
+                }
+                override fun onFailure(ws: WebSocket, t: Throwable, r: Response?) =
+                    cont.resumeWithException(t)
+            }
+            client.newWebSocket(Request.Builder().url(url).build(), listener)
+        }
+        // drain ready message
+        withTimeoutOrNull(3000) { messages.receive() }
+    }
+
+    private suspend fun sendArtRequest(params: JSONObject) {
+        val inner = params.toString()
+        val outer = JSONObject().apply {
+            put("method", "ms.channel.emit")
+            put("params", JSONObject().apply {
+                put("event", "art_app_request")
+                put("to", "host")
+                put("data", inner)     // double-encoded: inner is a JSON string
+            })
+        }
+        ws!!.send(outer.toString())
+    }
+
+    // uploadAndDisplay, revertToSamsungArt: same logic as Swift, translated to Kotlin
+    // TCP upload: use java.net.Socket, DataOutputStream for 4-byte big-endian length prefix
+
+    suspend fun tcpUpload(host: String, port: Int, key: String, jpeg: ByteArray,
+                          onProgress: (Float) -> Unit) = withContext(Dispatchers.IO) {
+        val header = JSONObject().apply {
+            put("num", 0); put("total", 1); put("fileLength", jpeg.size)
+            put("fileName", "dummy"); put("fileType", "jpg")
+            put("secKey", key); put("version", "0.0.1")
+        }.toString().toByteArray(Charsets.UTF_8)
+
+        Socket(host, port).use { sock ->
+            val out = DataOutputStream(sock.getOutputStream())
+            out.writeInt(header.size)          // 4-byte big-endian length
+            out.write(header)
+            val chunkSize = 65_536
+            var sent = 0
+            while (sent < jpeg.size) {
+                val end = minOf(sent + chunkSize, jpeg.size)
+                out.write(jpeg, sent, end - sent)
+                sent = end
+                onProgress(sent.toFloat() / jpeg.size)
+            }
+            out.flush()
+        }
+    }
+
+    fun disconnect() { ws?.close(1000, null) }
+}
+```
+
+---
+
+### ImageStore (Android)
+
+```kotlin
+data class GalleryItem(
+    val id: String = UUID.randomUUID().toString(),
+    val prompt: String,
+    val date: String,      // ISO-8601
+    var contentId: String,
+    val filename: String
+)
+
+class ImageStore(private val context: Context) {
+    private val dir = File(context.filesDir, "nanoframe").also { it.mkdirs() }
+    private val metaFile = File(dir, "gallery.json")
+
+    fun add(jpeg: ByteArray, prompt: String, contentId: String): GalleryItem {
+        val item = GalleryItem(prompt = prompt,
+            date = Instant.now().toString(), contentId = contentId,
+            filename = "${UUID.randomUUID()}.jpg")
+        File(dir, item.filename).writeBytes(jpeg)
+        val items = loadAll().toMutableList().also { it.add(0, item) }
+        persist(items)
+        return item
+    }
+
+    fun bitmap(item: GalleryItem): Bitmap? =
+        BitmapFactory.decodeFile(File(dir, item.filename).absolutePath)
+
+    fun saveToMediaStore(jpeg: ByteArray, prompt: String) {
+        val values = ContentValues().apply {
+            put(MediaStore.Images.Media.DISPLAY_NAME, "${prompt.take(40)}.jpg")
+            put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Nanoframe")
+        }
+        val uri = context.contentResolver.insert(
+            MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)!!
+        context.contentResolver.openOutputStream(uri)!!.use { it.write(jpeg) }
+    }
+
+    // loadAll(), persist(), delete(): standard JSON serialisation via Gson or kotlinx.serialization
+}
+```
+
+---
+
+### Auto-revert — WorkManager
+
+Because Android kills background coroutines when the app is backgrounded, use `WorkManager` for the revert — same rationale as `BGTaskScheduler` on iOS.
+
+```kotlin
+class RevertWorker(ctx: Context, params: WorkerParameters) : CoroutineWorker(ctx, params) {
+    override suspend fun doWork(): Result {
+        val prefs = PreferenceManager.getDefaultSharedPreferences(applicationContext)
+        val tvIP  = prefs.getString("tv_ip", "") ?: return Result.failure()
+        val token = prefs.getString("samsung_tv_token", "") ?: ""
+        val ids   = if (prefs.getBoolean("delete_on_revert", false))
+            prefs.getStringSet("nanoframe_content_ids", emptySet())!!.toList() else emptyList()
+        return runCatching {
+            val client = SamsungArtClient(tvIP, token)
+            client.checkReachable()
+            client.connect()
+            client.revertToSamsungArt(deleteIds = ids)
+            client.disconnect()
+            Result.success()
+        }.getOrElse { Result.retry() }
+    }
+}
+
+// Schedule from AppViewModel:
+fun scheduleRevert(delaySeconds: Int) {
+    val request = OneTimeWorkRequestBuilder<RevertWorker>()
+        .setInitialDelay(delaySeconds.toLong(), TimeUnit.SECONDS)
+        .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+        .addTag("nanoframe_revert")
+        .build()
+    WorkManager.getInstance(getApplication())
+        .enqueueUniqueWork("nanoframe_revert", ExistingWorkPolicy.REPLACE, request)
+}
+
+fun cancelRevert() {
+    WorkManager.getInstance(getApplication()).cancelAllWorkByTag("nanoframe_revert")
+}
+```
+
+Register `RevertWorker` in `AndroidManifest.xml` via the WorkManager `<provider>` (see manifest section above).
+
+---
+
+### Settings — Compose
+
+Settings that drive `Spinner`/`Switch` controls must flow through `StateFlow`, not raw `SharedPreferences` reads, or the control will snap back on recomposition:
+
+```kotlin
+class SettingsViewModel(app: Application) : AndroidViewModel(app) {
+    private val prefs = PreferenceManager.getDefaultSharedPreferences(app)
+
+    private val _provider = MutableStateFlow(
+        ImageProvider.fromRaw(prefs.getString("image_provider", "pollinations")!!)
+    )
+    val provider: StateFlow<ImageProvider> = _provider
+
+    fun setProvider(p: ImageProvider) {
+        _provider.value = p
+        prefs.edit { putString("image_provider", p.raw) }
+    }
+    // autoRevert, revertMinutes, deleteOnRevert: same pattern
+}
+
+@Composable
+fun SettingsScreen(vm: SettingsViewModel = viewModel()) {
+    val provider by vm.provider.collectAsStateWithLifecycle()
+    // ...
+    ExposedDropdownMenuBox(...) {
+        ImageProvider.entries.forEach { p ->
+            DropdownMenuItem(
+                text = { Text(p.displayName) },
+                onClick = { vm.setProvider(p) }
+            )
+        }
+    }
+}
+```
+
+---
+
+### 4K upscaling (Android)
+
+```kotlin
+fun upscaleTo4K(jpeg: ByteArray): ByteArray {
+    val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size)
+    if (bmp.width >= 3000) return jpeg
+    val scaled = Bitmap.createScaledBitmap(bmp, 3840, 2160, true)
+    return ByteArrayOutputStream().also { scaled.compress(Bitmap.CompressFormat.JPEG, 92, it) }.toByteArray()
+}
+```
+
+---
+
+### Google Assistant action (optional)
+
+`res/xml/actions.xml`:
+```xml
+<actions>
+  <action intentName="actions.intent.CREATE_THING">
+    <fulfillment urlTemplate="nanoframe://generate{?prompt}">
+      <parameter-mapping intentParameter="thing.name" urlParameter="prompt"/>
+    </fulfillment>
+  </action>
+</actions>
+```
+Handle the deep link in `MainActivity`:
+```kotlin
+intent?.data?.getQueryParameter("prompt")?.let { vm.generateAndSend(it) }
+```
+This is less tightly integrated than iOS Siri App Intents — it opens the app rather than running silently in background.
+
+---
+
+### App icon sizes
+
+| Folder | Size |
+|---|---|
+| `mipmap-mdpi` | 48×48 |
+| `mipmap-hdpi` | 72×72 |
+| `mipmap-xhdpi` | 96×96 |
+| `mipmap-xxhdpi` | 144×144 |
+| `mipmap-xxxhdpi` | 192×192 |
+| `mipmap-anydpi-v26` | `ic_launcher.xml` adaptive icon (foreground + background layers) |
 
 ---
 
