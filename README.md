@@ -4,7 +4,9 @@
 
 ![macOS 14+](https://img.shields.io/badge/macOS-14%2B-blue)
 ![iOS 16+](https://img.shields.io/badge/iOS-16%2B-blue)
+![Android 8+](https://img.shields.io/badge/Android-8%2B-3DDC84)
 ![Swift 5.9+](https://img.shields.io/badge/Swift-5.9%2B-orange)
+![Kotlin](https://img.shields.io/badge/Kotlin-1.9%2B-7F52FF)
 ![Samsung Frame](https://img.shields.io/badge/Samsung-Frame%20TV-1428A0)
 
 ---
@@ -15,14 +17,16 @@
 |---|---|---|
 | **macOS 14+** | `Sources/Nanoframe/` | Lango ESP32 voice assistant |
 | **iOS 16+** | `ios/` | Native Siri App Intents |
+| **Android 8+** | `android/` | Google Assistant deep link |
 
 ---
 
 ## Features
 
-- **Three image providers** — Pollinations.ai (free, no key), Nano Banana (native 4K), or DALL·E 3 (OpenAI)
+- **Four image providers** — Pollinations.ai (free, no key), Nano Banana (native 4K), GPT Image 1 or GPT Image 1 Mini (OpenAI)
+- **Source photo** *(iOS, planned)* — supply a reference photo from your library, camera, or Files app; GPT Image 1/Mini will incorporate it into the generated artwork using OpenAI's image-edits API
 - **Frame TV optimised prompts** — every prompt is automatically enhanced with display-specific guidance (wide colour gamut, high contrast, matte anti-glare panel, no HDR) before being sent to the provider
-- **4K upscaling** — Pollinations and DALL·E images are upscaled to 3840×2160 before upload
+- **4K upscaling** — Pollinations and GPT Image outputs are upscaled to 3840×2160 before upload; Nano Banana returns native 4K
 - **Push to Frame TV** — uploads over WebSocket on your local network; handles Samsung's pairing flow automatically
 - **Auto-revert** — optionally reverts to Samsung's art rotation after a configurable delay (5 min → 1 hour)
 - **Gallery** — every image sent to the TV is saved locally; browse, reload, resend, or delete from both the gallery and the TV
@@ -110,15 +114,66 @@ The revert command is scheduled via `BGTaskScheduler` so iOS wakes the app at th
 
 ---
 
+## Android
+
+### Requirements
+
+- Android Studio Hedgehog (2023.1) or later
+- Android 8.0+ (API 26+) device or emulator
+- Samsung Frame TV on the same Wi-Fi network
+
+### Quick start
+
+```bash
+cd nanoframe/android
+./gradlew assembleDebug
+# or open the android/ folder in Android Studio and run directly
+```
+
+On first launch, open **Settings** and enter your TV's IP address. Accept the pairing prompt that appears on your Samsung remote.
+
+### Voice control
+
+Add an Android Shortcut or use the Google Assistant integration (see `res/xml/actions.xml`). The Assistant action opens the app with a pre-filled prompt — tap **Generate** to proceed. This is less seamless than Siri on iOS; the app must be visible.
+
+### Background revert
+
+Auto-revert is handled by `WorkManager` — it schedules a background task that reconnects to the TV and restores art rotation, even if the app has been killed. Timing is approximate (WorkManager batches low-priority work), so allow a few extra minutes.
+
+---
+
 ## Image providers
 
 | Provider | Key required | Resolution | Notes |
 |---|---|---|---|
 | **Pollinations** | None | 1792×1024 → 4K upscale | Free, Flux model |
 | **Nano Banana** | Yes ([nanobanana.expert](https://nanobanana.expert)) | Native 4K | No upscaling, sharpest on large screens |
-| **DALL·E 3** | Yes (OpenAI `sk-…`) | 1792×1024 → 4K upscale | Best prompt fidelity |
+| **GPT Image 1** | Yes (OpenAI `sk-…`) | 1536×1024 → 4K upscale | High quality, best prompt fidelity |
+| **GPT Image 1 Mini** | Yes (OpenAI `sk-…`) | 1536×1024 → 4K upscale | Faster and cheaper than GPT Image 1 |
 
-API keys are entered in Settings and stored in UserDefaults on-device — never transmitted anywhere except directly to the chosen provider.
+API keys are entered in Settings and stored on-device — never transmitted anywhere except directly to the chosen provider.
+
+---
+
+## Source photo (iOS — planned)
+
+Supply a reference photo to guide image generation. Three input methods are planned:
+
+| Input | iOS API | Permission needed |
+|---|---|---|
+| **Photo library** | SwiftUI `PhotosPicker` | None (system picker handles privacy) |
+| **Camera** | `UIImagePickerController` | `NSCameraUsageDescription` |
+| **Files** | SwiftUI `.fileImporter` | None (security-scoped resources) |
+
+**Provider compatibility:**
+
+| Provider | Source photo support |
+|---|---|
+| **GPT Image 1 / Mini** | Full — uses OpenAI `/v1/images/edits` (multipart upload) |
+| **Nano Banana** | Not supported — falls back to text-only with a warning |
+| **Pollinations** | Not supported — falls back to text-only with a warning |
+
+See [`PLAN.md`](PLAN.md) for the full implementation plan.
 
 ---
 
@@ -163,7 +218,7 @@ The macOS app icon is generated programmatically from `Sources/Nanoframe/Resourc
 
 ```
 Sources/
-  Nanoframe/                    macOS app
+  Nanoframe/                    macOS app (Swift Package)
     NanoframeApp.swift          App entry point
     ContentView.swift           Main window + AppViewModel (generate, send, revert, keep)
     DallEService.swift          Image generation + Frame TV prompt enhancement
@@ -175,22 +230,45 @@ Sources/
   ProtocolTests/
     main.swift                  Protocol validation suite (no TV needed)
 
-ios/
+ios/                            iOS app (xcodegen)
   project.yml                   xcodegen spec
   NanoframeIOS.entitlements     Siri entitlement
   Sources/NanoframeIOS/
     NanoframeApp.swift          @main entry point + BGTaskScheduler registration
     ContentView.swift           SwiftUI UI + AppViewModel
     DallEService.swift          Image generation (UIKit version)
-    SamsungArtClient.swift      Samsung Frame TV protocol (shared logic, no AppKit)
-    ImageStore.swift            Local gallery persistence (UIImage version)
-    GalleryView.swift           Gallery grid + image detail sheet (iOS)
     SamsungArtClient.swift      Samsung Frame TV protocol (Swift 6-safe, no AppKit)
+    ImageStore.swift            Local gallery persistence (UIImage version)
+    GalleryView.swift           Gallery grid + image detail sheet
     Intents/
       ShowArtIntent.swift       Two Siri App Intents: show art + resume rotation
     Resources/
-      Assets.xcassets/          App icon
+      Assets.xcassets/          App icon + AccentColor
       Info.plist                Local network + background task permissions
+
+android/                        Android app (Kotlin + Jetpack Compose + Gradle)
+  build.gradle.kts
+  app/src/main/
+    AndroidManifest.xml
+    java/com/nanoframe/
+      MainActivity.kt           Entry point, NavHost
+      ui/
+        MainScreen.kt           Prompt input + Generate + Send buttons
+        GalleryScreen.kt        LazyVerticalGrid gallery
+        SettingsScreen.kt       Settings composable
+      viewmodel/
+        AppViewModel.kt         ViewModel + UiState StateFlow
+      service/
+        ImageGenService.kt      All 4 image providers (OkHttp)
+        SamsungArtClient.kt     WebSocket + TCP upload (OkHttp + java.net.Socket)
+        ImageStore.kt           Gallery persistence
+      worker/
+        RevertWorker.kt         WorkManager worker for background revert
+    res/
+      xml/actions.xml           Google Assistant action definition
+      mipmap-*/                 App icon at all densities
+
+SPEC.md                         Full build specification for all three platforms
 ```
 
 ---
