@@ -19,40 +19,121 @@ No image data is ever sent upstream; only text prompts travel over the wire.
 
 ---
 
-## API capability assessment
+## Provider capability matrix
 
-### GPT Image 1 / Mini — full img2img support ✅
+| Provider | Case | img2img | Mechanism | Why not |
+|---|---|---|---|---|
+| **GPT Image 1** | `.gptImage1` | **Yes** | `POST /v1/images/edits` multipart | — |
+| **GPT Image 1 Mini** | `.gptImage1Mini` | **Yes** | same endpoint, smaller model | — |
+| **Nano Banana** | `.nanoBanana` | **No** | JSON-only POST; no upload field | API has no image parameter |
+| **Pollinations** | `.pollinations` | **No** | GET endpoint; `image_url` param exists but source is on-device | No upload path; data URIs exceed URL limits; local HTTP server is fragile |
 
-OpenAI exposes a separate **images/edits** endpoint:
+### GPT Image 1 / Mini — full img2img ✅
+
+OpenAI's `/v1/images/edits` endpoint accepts:
 
 ```
 POST https://api.openai.com/v1/images/edits
 Content-Type: multipart/form-data
 
-image    = <PNG or JPEG bytes>   # source photo
-prompt   = "..."                  # what to generate around/from it
+image    = <PNG or JPEG bytes>   # source photo, ≤ 25 MB
+prompt   = "..."
 model    = gpt-image-1            # (or gpt-image-1-mini)
 size     = 1536x1024              # landscape for Frame TV
 n        = 1
 quality  = high / medium
 ```
 
-The model interprets the source image as the canvas and rewrites it according to the prompt. Without a mask, the entire image is treated as the editable region — the result looks like a stylised repaint of the subject in the described context.
+Without a mask, the entire image is the editable region — the model repaints the source subject into the described context. Both `gpt-image-1` and `gpt-image-1-mini` support this endpoint; the mini variant is faster and cheaper, full is higher quality. The response format is identical to `/v1/images/generations`: `data[0].b64_json`.
 
-This requires a **multipart form-data** request built manually in Swift (Foundation has no built-in multipart encoder). The image must be resized to ≤ 25 MB and can be PNG or JPEG.
+Swift's `Foundation` has no built-in multipart encoder; the body must be constructed manually (~30 lines, no dependency).
 
-### Nano Banana — unsupported ⚠️
+### Nano Banana — unsupported ✗
 
-The `/api/v1/generate` endpoint only accepts a JSON body with `prompt`, `aspect_ratio`, `resolution`, and `output_format`. There is no documented image upload parameter. Behaviour with a source photo: fall back to text-only generation with an in-app warning.
+`POST /api/v1/generate` accepts a JSON body with exactly four fields: `prompt`, `aspect_ratio`, `resolution`, `output_format`. No image upload parameter is documented or available. Source photos are silently ignored; generation falls back to text-only.
 
-### Pollinations — no clean path ⚠️
+### Pollinations — unsupported in practice ✗
 
-Pollinations does accept an `image_url` query parameter for reference-guided generation, but the source photo lives on-device; there is no built-in hosting step. Options considered and rejected:
+The GET endpoint does accept an `image_url` query parameter, but the source photo lives on-device and is not reachable by URL. Options evaluated and rejected:
 
-- **Base64 data URI in query string** — exceeds URL length limits for realistic photo sizes.
-- **Temporary local HTTP server** — complicated, fragile, requires Local Network entitlement already present but repurposing it is architecturally messy.
+- **Base64 data URI** — a 4K photo encodes to ~8 MB of ASCII; URL query strings have a ~2 KB practical limit.
+- **Temporary local HTTP server** — fragile, requires the Local Network entitlement (already present for a different purpose), and adds meaningful complexity for a free provider.
 
-Behaviour with a source photo: fall back to text-only with a warning. If Pollinations later exposes a POST endpoint for image upload, this can be wired up without any UI changes.
+If Pollinations ever exposes a binary POST endpoint the service layer can be updated with no UI changes needed.
+
+---
+
+## Conditional UI design
+
+### The `supportsSourcePhoto` property
+
+Provider capability is declared on the enum itself, not scattered through the view or ViewModel. Add two computed properties to `ImageProvider` in `DallEService.swift`:
+
+```swift
+extension ImageProvider {
+    /// Whether this provider's API can accept a source image for guided generation.
+    var supportsSourcePhoto: Bool {
+        switch self {
+        case .gptImage1, .gptImage1Mini: return true
+        case .pollinations, .nanoBanana:  return false
+        }
+    }
+
+    /// Human-readable reason shown in the UI when supportsSourcePhoto == false.
+    var sourcePhotoUnavailableReason: String {
+        switch self {
+        case .gptImage1, .gptImage1Mini:
+            return ""
+        case .pollinations:
+            return "Pollinations uses a URL-based API that can't receive image uploads."
+        case .nanoBanana:
+            return "Nano Banana's API doesn't accept source images."
+        }
+    }
+}
+```
+
+This is the single source of truth. The View reads `vm.provider.supportsSourcePhoto`; `DallEService` checks it to decide which endpoint to call; nothing else needs to know.
+
+### UI behaviour — always show, disable with explanation (chosen approach)
+
+Three options were considered:
+
+| Option | Behaviour | Verdict |
+|---|---|---|
+| **A — Hide when unsupported** | Strip disappears when provider can't use it | ✗ User confused why the feature vanished after switching provider |
+| **B — Always show, grey out** | Pickers disabled + one-line reason; photo kept if already loaded | ✅ Chosen |
+| **C — Show but auto-clear** | Switching to incompatible provider silently drops the loaded photo | ✗ Destroys user data without warning |
+
+**Option B** is the standard iOS pattern for unavailable features and keeps the layout stable as the user changes providers.
+
+### Source photo strip — full state machine
+
+```
+Provider supports photo?
+│
+├── YES, no photo loaded
+│   [ 📷 Camera ]  [ 🖼 Library ]  [ 📁 Files ]          (buttons enabled)
+│
+├── YES, photo loaded
+│   [thumb] ×   "Using as reference for generation."
+│
+├── NO, no photo loaded
+│   [ 📷 Camera ]  [ 🖼 Library ]  [ 📁 Files ]          (buttons .disabled(true), 40% opacity)
+│   "Source photos require GPT Image 1 or GPT Image 1 Mini."
+│
+└── NO, photo already loaded (user switched provider after picking)
+    [thumb] ×   ⚠ "[Provider] can't use source photos — prompt only."
+                   (photo is kept; user decides whether to clear it or switch provider)
+```
+
+The ViewModel does **not** clear `sourcePhoto` when the provider changes. The user picked that photo intentionally; silently dropping it would be surprising. The warning is enough.
+
+### Connecting provider to the `Generate` button
+
+The Generate button is already disabled when `vm.prompt` is empty. No change needed there — when the provider doesn't support source photos, the button stays enabled and generation proceeds text-only, with the strip warning already visible before the tap.
+
+The ViewModel's `generate()` method passes `sourcePhoto` to `DallEService.generate()`, which checks `provider.supportsSourcePhoto` internally and either routes to the edit endpoint or calls the standard text-only path.
 
 ---
 
@@ -205,12 +286,13 @@ private func prepareSourceImage(_ image: UIImage, maxDimension: CGFloat = 1536) 
 
 | # | Task | File(s) touched |
 |---|---|---|
+| 1.0 | Add `supportsSourcePhoto` and `sourcePhotoUnavailableReason` to `ImageProvider` | `DallEService.swift` |
 | 1.1 | Add `NSCameraUsageDescription` to `project.yml` | `ios/project.yml` |
-| 1.2 | Add `sourcePhoto: UIImage?` and `sourcePhotoWarning: String?` to `AppViewModel` | `ContentView.swift` |
+| 1.2 | Add `sourcePhoto: UIImage?` to `AppViewModel`; remove `sourcePhotoWarning` (UI reads `provider.sourcePhotoUnavailableReason` directly) | `ContentView.swift` |
 | 1.3 | Implement `prepareSourceImage(_:maxDimension:)` helper | `DallEService.swift` |
 | 1.4 | Implement `makeMultipart(…)` helper | `DallEService.swift` |
 | 1.5 | Implement `gptImageEdit(prompt:apiKey:model:source:)` private method | `DallEService.swift` |
-| 1.6 | Wire `sourcePhoto` through public `generate()` method; add provider-compatibility warning logic | `DallEService.swift` |
+| 1.6 | Wire `sourcePhoto` through public `generate()`; route to edit vs. generate based on `provider.supportsSourcePhoto` | `DallEService.swift` |
 
 ### P2 — Photo library picker (easiest input, enables end-to-end testing)
 
@@ -219,7 +301,7 @@ private func prepareSourceImage(_ image: UIImage, maxDimension: CGFloat = 1536) 
 | 2.1 | Add `sourcePhotoStrip` view builder to `ContentView` | `ContentView.swift` |
 | 2.2 | `PhotosPicker` button + `@State var photoPickerItem: PhotosPickerItem?` + `.onChange` loader | `ContentView.swift` |
 | 2.3 | Thumbnail + clear button when `vm.sourcePhoto != nil` | `ContentView.swift` |
-| 2.4 | Provider warning label below strip | `ContentView.swift` |
+| 2.4 | Disable pickers + show `vm.provider.sourcePhotoUnavailableReason` when `!vm.provider.supportsSourcePhoto` | `ContentView.swift` |
 
 ### P3 — Camera capture
 
