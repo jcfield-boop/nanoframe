@@ -23,19 +23,53 @@ enum ImageProvider: String, CaseIterable {
     }
 
     var needsKey: Bool { self != .pollinations }
+
+    /// Whether this provider's API can accept a source image for guided generation.
+    var supportsSourcePhoto: Bool {
+        switch self {
+        case .gptImage1, .gptImage1Mini: return true
+        case .pollinations, .nanoBanana:  return false
+        }
+    }
+
+    /// Human-readable reason shown in the UI when supportsSourcePhoto == false.
+    var sourcePhotoUnavailableReason: String {
+        switch self {
+        case .gptImage1, .gptImage1Mini: return ""
+        case .pollinations: return "Pollinations uses a URL-based API that can't receive image uploads."
+        case .nanoBanana:   return "Nano Banana's API doesn't accept source images."
+        }
+    }
 }
 
 struct DallEService {
 
     // MARK: - Public
 
-    func generate(prompt: String, apiKey: String, provider: ImageProvider) async throws -> (jpeg: Data, image: UIImage) {
+    func generate(
+        prompt: String,
+        apiKey: String,
+        provider: ImageProvider,
+        sourcePhoto: UIImage? = nil
+    ) async throws -> (jpeg: Data, image: UIImage) {
         let enhanced = Self.enhanceForFrameTV(prompt)
         switch provider {
-        case .pollinations:  return try await pollinations(prompt: enhanced)
-        case .nanoBanana:    return try await nanoBanana(prompt: enhanced, apiKey: apiKey)
-        case .gptImage1:     return try await gptImageGen(prompt: enhanced, apiKey: apiKey, model: "gpt-image-1")
-        case .gptImage1Mini: return try await gptImageGen(prompt: enhanced, apiKey: apiKey, model: "gpt-image-1-mini")
+        case .pollinations:
+            return try await pollinations(prompt: enhanced)
+        case .nanoBanana:
+            return try await nanoBanana(prompt: enhanced, apiKey: apiKey)
+        case .gptImage1:
+            if let photo = sourcePhoto {
+                return try await gptImageEdit(prompt: enhanced, apiKey: apiKey,
+                                              model: "gpt-image-1", source: photo)
+            }
+            return try await gptImageGen(prompt: enhanced, apiKey: apiKey, model: "gpt-image-1")
+        case .gptImage1Mini:
+            if let photo = sourcePhoto {
+                return try await gptImageEdit(prompt: enhanced, apiKey: apiKey,
+                                              model: "gpt-image-1-mini", source: photo)
+            }
+            return try await gptImageGen(prompt: enhanced, apiKey: apiKey, model: "gpt-image-1-mini")
         }
     }
 
@@ -54,7 +88,7 @@ struct DallEService {
     func upscaleTo4K(_ jpegData: Data) -> Data? {
         guard let ci = CIImage(data: jpegData) else { return nil }
         let src = ci.extent.size
-        guard src.width < 3000 else { return jpegData }   // already large enough, skip
+        guard src.width < 3000 else { return jpegData }
 
         let scaled = ci.transformed(by: CGAffineTransform(
             scaleX: 3840.0 / src.width,
@@ -110,9 +144,8 @@ struct DallEService {
         return try decode(imageData)
     }
 
-    // MARK: - GPT Image (gpt-image-1 and gpt-image-1-mini)
+    // MARK: - GPT Image — text-to-image (generations endpoint)
     // Both models return b64_json and support 1536×1024 landscape.
-    // Mini is faster and cheaper; full is higher quality.
 
     private func gptImageGen(prompt: String, apiKey: String, model: String) async throws -> (jpeg: Data, image: UIImage) {
         let url = URL(string: "https://api.openai.com/v1/images/generations")!
@@ -144,7 +177,93 @@ struct DallEService {
         return try decode(imageData)
     }
 
-    // MARK: - Helpers
+    // MARK: - GPT Image — image-to-image (edits endpoint)
+    // Sends the source photo as multipart form-data; the model repaints it according to the prompt.
+
+    private func gptImageEdit(prompt: String, apiKey: String, model: String,
+                               source: UIImage) async throws -> (jpeg: Data, image: UIImage) {
+        guard let imageData = prepareSourceImage(source) else {
+            throw ImageGenError(message: "Could not prepare source image for upload")
+        }
+
+        let url = URL(string: "https://api.openai.com/v1/images/edits")!
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+
+        let boundary = UUID().uuidString.replacingOccurrences(of: "-", with: "")
+        req.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+
+        req.httpBody = makeMultipart(
+            boundary: boundary,
+            fields: [
+                (name: "model",   value: model),
+                (name: "prompt",  value: prompt),
+                (name: "n",       value: "1"),
+                (name: "size",    value: "1536x1024"),
+                (name: "quality", value: model.hasSuffix("mini") ? "medium" : "high")
+            ],
+            fileField: "image",
+            filename:  "source.jpg",
+            mimeType:  "image/jpeg",
+            fileData:  imageData
+        )
+
+        let (data, response) = try await URLSession.shared.data(for: req)
+        try checkHTTP(response, data: data)
+
+        struct Resp: Decodable { struct Item: Decodable { let b64_json: String }; let data: [Item] }
+        let result = try JSONDecoder().decode(Resp.self, from: data)
+        guard let b64 = result.data.first?.b64_json,
+              let decoded = Data(base64Encoded: b64) else {
+            throw ImageGenError(message: "No image data in \(model) edit response")
+        }
+        return try decode(decoded)
+    }
+
+    // MARK: - Image helpers
+
+    /// Resizes a UIImage so the longest edge is ≤ maxDimension, then encodes as JPEG.
+    /// Handles HEIC natively — UIGraphicsImageRenderer normalises orientation and format.
+    private func prepareSourceImage(_ image: UIImage, maxDimension: CGFloat = 1536) -> Data? {
+        let size    = image.size
+        let longest = max(size.width, size.height)
+        let scale   = longest > maxDimension ? maxDimension / longest : 1
+        let target  = CGSize(width:  (size.width  * scale).rounded(),
+                             height: (size.height * scale).rounded())
+
+        let renderer = UIGraphicsImageRenderer(size: target)
+        let resized  = renderer.image { _ in
+            image.draw(in: CGRect(origin: .zero, size: target))
+        }
+        return resized.jpegData(compressionQuality: 0.92)
+    }
+
+    /// Builds a multipart/form-data body manually — Foundation has no built-in encoder.
+    private func makeMultipart(boundary: String,
+                               fields: [(name: String, value: String)],
+                               fileField: String, filename: String,
+                               mimeType: String, fileData: Data) -> Data {
+        var body = Data()
+
+        func append(_ s: String) { body.append(Data(s.utf8)) }
+
+        for field in fields {
+            append("--\(boundary)\r\n")
+            append("Content-Disposition: form-data; name=\"\(field.name)\"\r\n\r\n")
+            append("\(field.value)\r\n")
+        }
+
+        append("--\(boundary)\r\n")
+        append("Content-Disposition: form-data; name=\"\(fileField)\"; filename=\"\(filename)\"\r\n")
+        append("Content-Type: \(mimeType)\r\n\r\n")
+        body.append(fileData)
+        append("\r\n--\(boundary)--\r\n")
+
+        return body
+    }
+
+    // MARK: - HTTP helpers
 
     private func checkHTTP(_ response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse, http.statusCode == 200 else {

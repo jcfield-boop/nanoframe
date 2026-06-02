@@ -1,5 +1,8 @@
 # Source Photo Feature — Implementation Plan
 
+> **Status: Implemented** — all P1–P5 tasks shipped in commit `source-photo-feature`. See SPEC.md for the authoritative technical reference.
+
+
 Add a **source photo** input to the iOS app so the user can supply a reference image (a person, object, scene) and incorporate it into AI-generated artwork sent to the Frame TV.
 
 ---
@@ -284,47 +287,47 @@ private func prepareSourceImage(_ image: UIImage, maxDimension: CGFloat = 1536) 
 
 ### P1 — Core (required for any source photo generation)
 
-| # | Task | File(s) touched |
-|---|---|---|
-| 1.0 | Add `supportsSourcePhoto` and `sourcePhotoUnavailableReason` to `ImageProvider` | `DallEService.swift` |
-| 1.1 | Add `NSCameraUsageDescription` to `project.yml` | `ios/project.yml` |
-| 1.2 | Add `sourcePhoto: UIImage?` to `AppViewModel`; remove `sourcePhotoWarning` (UI reads `provider.sourcePhotoUnavailableReason` directly) | `ContentView.swift` |
-| 1.3 | Implement `prepareSourceImage(_:maxDimension:)` helper | `DallEService.swift` |
-| 1.4 | Implement `makeMultipart(…)` helper | `DallEService.swift` |
-| 1.5 | Implement `gptImageEdit(prompt:apiKey:model:source:)` private method | `DallEService.swift` |
-| 1.6 | Wire `sourcePhoto` through public `generate()`; route to edit vs. generate based on `provider.supportsSourcePhoto` | `DallEService.swift` |
+| # | Task | File(s) touched | Done |
+|---|---|---|---|
+| 1.0 | Add `supportsSourcePhoto` and `sourcePhotoUnavailableReason` to `ImageProvider` | `DallEService.swift` | ✅ |
+| 1.1 | Add `NSCameraUsageDescription` to `project.yml` | `ios/project.yml` | ✅ |
+| 1.2 | Add `sourcePhoto: UIImage?` to `AppViewModel`; UI reads `provider.sourcePhotoUnavailableReason` directly (no separate warning property needed) | `ContentView.swift` | ✅ |
+| 1.3 | Implement `prepareSourceImage(_:maxDimension:)` helper | `DallEService.swift` | ✅ |
+| 1.4 | Implement `makeMultipart(…)` helper | `DallEService.swift` | ✅ |
+| 1.5 | Implement `gptImageEdit(prompt:apiKey:model:source:)` private method | `DallEService.swift` | ✅ |
+| 1.6 | Wire `sourcePhoto` through public `generate()`; route to edit vs. generate based on `provider.supportsSourcePhoto` | `DallEService.swift` | ✅ |
 
 ### P2 — Photo library picker (easiest input, enables end-to-end testing)
 
-| # | Task | File(s) touched |
-|---|---|---|
-| 2.1 | Add `sourcePhotoStrip` view builder to `ContentView` | `ContentView.swift` |
-| 2.2 | `PhotosPicker` button + `@State var photoPickerItem: PhotosPickerItem?` + `.onChange` loader | `ContentView.swift` |
-| 2.3 | Thumbnail + clear button when `vm.sourcePhoto != nil` | `ContentView.swift` |
-| 2.4 | Disable pickers + show `vm.provider.sourcePhotoUnavailableReason` when `!vm.provider.supportsSourcePhoto` | `ContentView.swift` |
+| # | Task | File(s) touched | Done |
+|---|---|---|---|
+| 2.1 | Add `sourcePhotoStrip` view builder to `ContentView` | `ContentView.swift` | ✅ |
+| 2.2 | `PhotosPicker` button + `@State var photoPickerItem: PhotosPickerItem?` + `.onChange` loader | `ContentView.swift` | ✅ |
+| 2.3 | Thumbnail + clear button when `vm.sourcePhoto != nil` | `ContentView.swift` | ✅ |
+| 2.4 | Disable pickers + show `vm.provider.sourcePhotoUnavailableReason` when `!vm.provider.supportsSourcePhoto` | `ContentView.swift` | ✅ |
 
 ### P3 — Camera capture
 
-| # | Task | File(s) touched |
-|---|---|---|
-| 3.1 | `CameraPickerView: UIViewControllerRepresentable` | New file `CameraPickerView.swift` |
-| 3.2 | Camera button in source photo strip (hidden on simulator) | `ContentView.swift` |
+| # | Task | File(s) touched | Done |
+|---|---|---|---|
+| 3.1 | `CameraPickerView: UIViewControllerRepresentable` | New file `CameraPickerView.swift` | ✅ |
+| 3.2 | Camera button in source photo strip (disabled on simulator via `isSourceTypeAvailable`) | `ContentView.swift` | ✅ |
 
 ### P4 — File import
 
-| # | Task | File(s) touched |
-|---|---|---|
-| 4.1 | `.fileImporter` modifier on `ContentView` | `ContentView.swift` |
-| 4.2 | Files button in source photo strip | `ContentView.swift` |
+| # | Task | File(s) touched | Done |
+|---|---|---|---|
+| 4.1 | `.fileImporter` modifier on `ContentView` | `ContentView.swift` | ✅ |
+| 4.2 | Files button in source photo strip | `ContentView.swift` | ✅ |
 
 ### P5 — Polish
 
-| # | Task | Notes |
-|---|---|---|
-| 5.1 | Accessibility labels on source photo strip buttons | — |
-| 5.2 | HEIC → JPEG conversion for file-imported images | HEIC passes `UIImage(data:)` fine; output `jpegData` handles it |
-| 5.3 | Update SPEC.md with source photo section | — |
-| 5.4 | Siri Intent update — `ShowArtIntent` could accept an optional attachment, but Siri shortcuts don't easily pass photos; leave as text-only for now | — |
+| # | Task | Notes | Done |
+|---|---|---|---|
+| 5.1 | Accessibility labels + hints on all source photo strip buttons | `.accessibilityLabel` + `.accessibilityHint` on Camera, Library, Files, thumbnail, and clear button | ✅ |
+| 5.2 | HEIC → JPEG conversion for file-imported images | `UIGraphicsImageRenderer` in `prepareSourceImage` handles it automatically | ✅ |
+| 5.3 | Update SPEC.md with source photo section | Added full section covering API, helpers, ViewModel, UI state machine, permissions | ✅ |
+| 5.4 | Siri Intent update | Left as text-only — Siri shortcuts don't easily pass photos | deferred |
 
 ---
 

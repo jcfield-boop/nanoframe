@@ -24,7 +24,7 @@
 ## Features
 
 - **Four image providers** — Pollinations.ai (free, no key), Nano Banana (native 4K), GPT Image 1 or GPT Image 1 Mini (OpenAI)
-- **Source photo** *(iOS, planned)* — supply a reference photo from your library, camera, or Files app; GPT Image 1/Mini will incorporate it into the generated artwork using OpenAI's image-edits API
+- **Source photo** *(iOS)* — supply a reference photo from your library, camera, or Files app; GPT Image 1/Mini incorporate it into the generated artwork via OpenAI's image-edits API (img2img)
 - **Frame TV optimised prompts** — every prompt is automatically enhanced with display-specific guidance (wide colour gamut, high contrast, matte anti-glare panel, no HDR) before being sent to the provider
 - **4K upscaling** — Pollinations and GPT Image outputs are upscaled to 3840×2160 before upload; Nano Banana returns native 4K
 - **Push to Frame TV** — uploads over WebSocket on your local network; handles Samsung's pairing flow automatically
@@ -155,9 +155,11 @@ API keys are entered in Settings and stored on-device — never transmitted anyw
 
 ---
 
-## Source photo (iOS — planned)
+## Source photo (iOS)
 
-Supply a reference photo to guide image generation. Three input methods are planned:
+Supply a reference photo to guide image generation — a person, object, or scene that the AI will incorporate into the generated artwork.
+
+**Three input methods:**
 
 | Input | iOS API | Permission needed |
 |---|---|---|
@@ -169,11 +171,11 @@ Supply a reference photo to guide image generation. Three input methods are plan
 
 | Provider | Source photo support |
 |---|---|
-| **GPT Image 1 / Mini** | Full — uses OpenAI `/v1/images/edits` (multipart upload) |
-| **Nano Banana** | Not supported — falls back to text-only with a warning |
-| **Pollinations** | Not supported — falls back to text-only with a warning |
+| **GPT Image 1 / Mini** | Full — uses OpenAI `/v1/images/edits` multipart upload |
+| **Nano Banana** | Not supported — strip shown greyed-out with explanation |
+| **Pollinations** | Not supported — strip shown greyed-out with explanation |
 
-See [`PLAN.md`](PLAN.md) for the full implementation plan.
+When a provider doesn't support source photos the picker buttons are visible but disabled with a one-line explanation. Switching providers does not clear a loaded photo — the user decides when to remove it.
 
 ---
 

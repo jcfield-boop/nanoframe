@@ -1,5 +1,8 @@
 import SwiftUI
+import UIKit
 import Photos
+import PhotosUI
+import UniformTypeIdentifiers
 import BackgroundTasks
 
 // MARK: - ViewModel
@@ -15,6 +18,7 @@ class AppViewModel: ObservableObject {
     @Published var uploadProgress: Double = 0
     @Published var tvLog: [String] = []
     @Published var revertAt: Date? = nil
+    @Published var sourcePhoto: UIImage?
 
     // MARK: Persisted settings
     // @Published so SwiftUI re-renders when picker/toggle values change.
@@ -102,7 +106,8 @@ class AppViewModel: ObservableObject {
             let (data, image) = try await svc.generate(
                 prompt: prompt.trimmingCharacters(in: .whitespacesAndNewlines),
                 apiKey: activeKey,
-                provider: provider
+                provider: provider,
+                sourcePhoto: provider.supportsSourcePhoto ? sourcePhoto : nil
             )
             imageData = data
             generatedImage = image
@@ -299,6 +304,9 @@ struct ContentView: View {
     @State private var showSettings    = false
     @State private var showGallery     = false
     @State private var savedToPhotos   = false
+    @State private var photoPickerItem: PhotosPickerItem?
+    @State private var showCameraPicker = false
+    @State private var showFilePicker  = false
     @FocusState private var promptFocused: Bool
 
     var body: some View {
@@ -306,6 +314,7 @@ struct ContentView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     imageCard
+                    sourcePhotoStrip
                     promptSection
                     actionButtons
                     statusSection
@@ -340,6 +349,24 @@ struct ContentView: View {
                                 Button("Done") { showGallery = false }
                             }
                         }
+                }
+            }
+            .sheet(isPresented: $showCameraPicker) {
+                CameraPickerView(image: Binding(
+                    get: { vm.sourcePhoto },
+                    set: { vm.sourcePhoto = $0 }
+                ))
+            }
+            .fileImporter(
+                isPresented: $showFilePicker,
+                allowedContentTypes: [.image],
+                allowsMultipleSelection: false
+            ) { result in
+                guard let url = try? result.get().first,
+                      url.startAccessingSecurityScopedResource() else { return }
+                defer { url.stopAccessingSecurityScopedResource() }
+                if let data = try? Data(contentsOf: url) {
+                    vm.sourcePhoto = UIImage(data: data)
                 }
             }
         }
@@ -414,6 +441,104 @@ struct ContentView: View {
                 }
             }
             .padding(.horizontal, 4)
+        }
+    }
+
+    // MARK: Source Photo Strip
+
+    @ViewBuilder
+    private var sourcePhotoStrip: some View {
+        let supported = vm.provider.supportsSourcePhoto
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Source Photo")
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.secondary)
+
+            if let photo = vm.sourcePhoto {
+                // Loaded state — thumbnail + status + clear button
+                HStack(spacing: 12) {
+                    Image(uiImage: photo)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: 64, height: 64)
+                        .clipShape(RoundedRectangle(cornerRadius: 8))
+                        .accessibilityLabel("Source photo thumbnail")
+
+                    if supported {
+                        Text("Using as reference for generation.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Label(vm.provider.sourcePhotoUnavailableReason,
+                              systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+
+                    Spacer()
+
+                    Button {
+                        vm.sourcePhoto = nil
+                        photoPickerItem = nil
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                            .font(.title3)
+                    }
+                    .accessibilityLabel("Remove source photo")
+                }
+            } else {
+                // Empty state — three picker buttons, disabled with explanation when unsupported
+                HStack(spacing: 8) {
+                    Button { showCameraPicker = true } label: {
+                        Label("Camera", systemImage: "camera")
+                            .font(.caption.bold())
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!supported || !UIImagePickerController.isSourceTypeAvailable(.camera))
+                    .opacity(supported && UIImagePickerController.isSourceTypeAvailable(.camera) ? 1 : 0.4)
+                    .accessibilityLabel("Take photo with camera")
+                    .accessibilityHint(!supported ? vm.provider.sourcePhotoUnavailableReason : "")
+
+                    PhotosPicker(selection: $photoPickerItem, matching: .images) {
+                        Label("Library", systemImage: "photo.on.rectangle.angled")
+                            .font(.caption.bold())
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!supported)
+                    .opacity(supported ? 1 : 0.4)
+                    .accessibilityLabel("Choose photo from library")
+                    .accessibilityHint(!supported ? vm.provider.sourcePhotoUnavailableReason : "")
+
+                    Button { showFilePicker = true } label: {
+                        Label("Files", systemImage: "folder")
+                            .font(.caption.bold())
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(!supported)
+                    .opacity(supported ? 1 : 0.4)
+                    .accessibilityLabel("Import photo from Files")
+                    .accessibilityHint(!supported ? vm.provider.sourcePhotoUnavailableReason : "")
+                }
+
+                if !supported {
+                    Label(vm.provider.sourcePhotoUnavailableReason, systemImage: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .accessibilityLabel("Source photo not available: \(vm.provider.sourcePhotoUnavailableReason)")
+                }
+            }
+        }
+        .onChange(of: photoPickerItem) { newItem in
+            guard let newItem else { return }
+            Task {
+                if let data = try? await newItem.loadTransferable(type: Data.self) {
+                    vm.sourcePhoto = UIImage(data: data)
+                }
+            }
         }
     }
 

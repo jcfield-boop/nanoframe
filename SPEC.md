@@ -99,6 +99,77 @@ func upscaleTo4K(_ jpegData: Data) -> Data? {
 
 ---
 
+## Source Photo (img2img) — iOS only
+
+### Provider capability
+
+Two computed properties on `ImageProvider` (in `DallEService.swift`) declare capability at the enum level:
+
+```swift
+var supportsSourcePhoto: Bool        // true for gptImage1 / gptImage1Mini
+var sourcePhotoUnavailableReason: String  // human-readable "why not" for the UI
+```
+
+| Provider | Supported | Reason if not |
+|---|---|---|
+| `gptImage1` | Yes | Uses `/v1/images/edits` |
+| `gptImage1Mini` | Yes | Same endpoint |
+| `nanoBanana` | No | JSON-only API; no upload field |
+| `pollinations` | No | GET endpoint; `image_url` requires a hosted URL |
+
+### Image-to-image call (`gptImageEdit`)
+
+When `sourcePhoto != nil` and the provider supports it, `DallEService.generate()` routes to `gptImageEdit()` instead of `gptImageGen()`:
+
+```
+POST https://api.openai.com/v1/images/edits
+Content-Type: multipart/form-data; boundary=<uuid>
+
+Fields:  model, prompt, n=1, size=1536x1024, quality
+File:    image = <JPEG bytes of resized source photo>
+```
+
+Response shape is identical to `/v1/images/generations`: `{ data: [{ b64_json: "..." }] }`.
+
+### Source image pre-processing (`prepareSourceImage`)
+
+Resizes to ≤ 1536 px on the longest axis (preserving aspect ratio), normalises orientation via `UIGraphicsImageRenderer`, and encodes as JPEG at 0.92 quality. HEIC files from the camera/library are converted automatically.
+
+### Multipart builder (`makeMultipart`)
+
+Constructs a `multipart/form-data` body manually — Foundation has no built-in encoder. Accepts text fields and a single binary file part. ~20 lines, no dependencies.
+
+### AppViewModel additions
+
+```swift
+@Published var sourcePhoto: UIImage?   // user-selected reference; nil = text-only
+```
+
+`generate()` passes `provider.supportsSourcePhoto ? sourcePhoto : nil` to the service. `sourcePhoto` is NOT cleared after generation — the user decides when to remove it.
+
+### UI — source photo strip (iOS `ContentView`)
+
+Always-visible section between the image card and the prompt field. State machine:
+
+- **No photo, provider supports it** — three enabled buttons: Camera / Library / Files
+- **No photo, provider doesn't support it** — same buttons at 0.4 opacity (`.disabled`), with `sourcePhotoUnavailableReason` shown beneath
+- **Photo loaded, provider supports it** — 64 pt thumbnail + "Using as reference" label + clear (×) button
+- **Photo loaded, provider doesn't support it** — thumbnail + orange warning label + clear button
+
+Photo sources:
+- **Library** — SwiftUI `PhotosPicker` (iOS 16+, no permission prompt; loads as `Data` via `loadTransferable`)
+- **Camera** — `CameraPickerView: UIViewControllerRepresentable` wrapping `UIImagePickerController`; hidden on simulator via `isSourceTypeAvailable(.camera)`
+- **Files** — SwiftUI `.fileImporter` with `allowedContentTypes: [.image]`; security-scoped resource access
+
+### Permissions
+
+| Key | Added to `project.yml` | Reason |
+|---|---|---|
+| `NSCameraUsageDescription` | Yes | Camera source picker |
+| `NSPhotoLibraryUsageDescription` | Not needed | `PhotosPicker` handles privacy internally |
+
+---
+
 ## Samsung Frame TV protocol
 
 Tested on: Samsung Frame TV LS03A, firmware T-NKM2AKUC-2301.1.

@@ -32,6 +32,7 @@ targets:
           UIColorName: systemBackground
         NSLocalNetworkUsageDescription: "Nanoframe connects to your Samsung Frame TV over Wi-Fi to display AI-generated art."
         NSPhotoLibraryAddUsageDescription: "Save generated artwork to your Photos library."
+        NSCameraUsageDescription: "Capture a source photo to guide AI image generation."
         NSBonjourServices:
           - "_samsungavrccommand._tcp"
         BGTaskSchedulerPermittedIdentifiers:
