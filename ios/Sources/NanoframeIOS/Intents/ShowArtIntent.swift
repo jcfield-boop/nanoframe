@@ -29,7 +29,7 @@ struct ShowArtOnFrameIntent: AppIntent {
         let apiKey: String
         switch provider {
         case .gptImage1, .gptImage1Mini: apiKey = UserDefaults.standard.string(forKey: "openai_api_key") ?? ""
-        case .nanoBanana:                apiKey = UserDefaults.standard.string(forKey: "nb_api_key") ?? ""
+        case .falFluxSchnell, .falFluxPro: apiKey = UserDefaults.standard.string(forKey: "fal_api_key") ?? ""
         case .pollinations:              apiKey = ""
         }
         let savedToken = UserDefaults.standard.string(forKey: "samsung_tv_token") ?? ""

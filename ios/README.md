@@ -49,7 +49,7 @@ Open the **Shortcuts** app → search for "Show Art on Frame TV" → add it and 
 
 ### How it works
 - `openAppWhenRun = false` — the intent runs entirely in the background; the app doesn't need to be open
-- Generation takes 15–30 s depending on the provider; Siri shows a spinner
+- Generation takes 2–30 s depending on the provider; Siri shows a spinner
 - Auto-revert runs via a detached background task when the intent completes
 
 ---

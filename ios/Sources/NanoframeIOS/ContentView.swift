@@ -55,9 +55,9 @@ class AppViewModel: ObservableObject {
         get { UserDefaults.standard.string(forKey: "openai_api_key") ?? "" }
         set { UserDefaults.standard.set(newValue, forKey: "openai_api_key") }
     }
-    var nbKey: String {
-        get { UserDefaults.standard.string(forKey: "nb_api_key") ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: "nb_api_key") }
+    var falKey: String {
+        get { UserDefaults.standard.string(forKey: "fal_api_key") ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: "fal_api_key") }
     }
     var tvIP: String {
         get { UserDefaults.standard.string(forKey: "tv_ip") ?? "" }
@@ -89,10 +89,11 @@ class AppViewModel: ObservableObject {
 
     var activeKey: String {
         switch provider {
-        case .pollinations:  return "free"
-        case .nanoBanana:    return nbKey
-        case .gptImage1:     return apiKey
-        case .gptImage1Mini: return apiKey
+        case .pollinations:             return "free"
+        case .falFluxSchnell,
+             .falFluxPro:              return falKey
+        case .gptImage1,
+             .gptImage1Mini:           return apiKey
         }
     }
 
@@ -701,16 +702,16 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.menu)
 
-                    if vm.provider == .gptImage1 || vm.provider == .gptImage1Mini {
+                    if vm.provider.needsOpenAIKey {
                         SecureField("OpenAI key (sk-…)", text: Binding(
                             get: { vm.apiKey }, set: { vm.apiKey = $0 }
                         ))
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)
                     }
-                    if vm.provider == .nanoBanana {
-                        SecureField("Nano Banana API key", text: Binding(
-                            get: { vm.nbKey }, set: { vm.nbKey = $0 }
+                    if vm.provider.needsFalKey {
+                        SecureField("fal.ai key (fal-…)", text: Binding(
+                            get: { vm.falKey }, set: { vm.falKey = $0 }
                         ))
                         .autocorrectionDisabled()
                         .textInputAutocapitalization(.never)

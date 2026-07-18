@@ -8,36 +8,39 @@ struct ImageGenError: LocalizedError {
 }
 
 enum ImageProvider: String, CaseIterable {
-    case pollinations  = "pollinations"
-    case nanoBanana    = "nano-banana"
-    case gptImage1     = "gpt-image-1"
-    case gptImage1Mini = "gpt-image-1-mini"
+    case pollinations   = "pollinations"
+    case falFluxSchnell = "fal-flux-schnell"
+    case falFluxPro     = "fal-flux-pro"
+    case gptImage1      = "gpt-image-1"
+    case gptImage1Mini  = "gpt-image-1-mini"
 
     var displayName: String {
         switch self {
-        case .pollinations:  return "Pollinations (free)"
-        case .nanoBanana:    return "Nano Banana"
-        case .gptImage1:     return "GPT Image 1 (OpenAI)"
-        case .gptImage1Mini: return "GPT Image 1 Mini (OpenAI)"
+        case .pollinations:   return "Pollinations (free)"
+        case .falFluxSchnell: return "Flux Schnell — fal.ai (~$0.003)"
+        case .falFluxPro:     return "Flux Pro — fal.ai (~$0.04)"
+        case .gptImage1:      return "GPT Image 1.5 — OpenAI (~$0.04)"
+        case .gptImage1Mini:  return "GPT Image Mini — OpenAI (~$0.005)"
         }
     }
 
     var needsKey: Bool { self != .pollinations }
+    var needsFalKey: Bool { self == .falFluxSchnell || self == .falFluxPro }
+    var needsOpenAIKey: Bool { self == .gptImage1 || self == .gptImage1Mini }
 
-    /// Whether this provider's API can accept a source image for guided generation.
     var supportsSourcePhoto: Bool {
         switch self {
         case .gptImage1, .gptImage1Mini: return true
-        case .pollinations, .nanoBanana:  return false
+        default: return false
         }
     }
 
-    /// Human-readable reason shown in the UI when supportsSourcePhoto == false.
     var sourcePhotoUnavailableReason: String {
         switch self {
         case .gptImage1, .gptImage1Mini: return ""
-        case .pollinations: return "Pollinations uses a URL-based API that can't receive image uploads."
-        case .nanoBanana:   return "Nano Banana's API doesn't accept source images."
+        case .pollinations:   return "Pollinations uses a URL-based API that can't receive image uploads."
+        case .falFluxSchnell,
+             .falFluxPro:     return "Switch to a GPT Image provider to use a source photo."
         }
     }
 }
@@ -56,14 +59,16 @@ struct DallEService {
         switch provider {
         case .pollinations:
             return try await pollinations(prompt: enhanced)
-        case .nanoBanana:
-            return try await nanoBanana(prompt: enhanced, apiKey: apiKey)
+        case .falFluxSchnell:
+            return try await falGenerate(modelId: "fal-ai/flux/schnell", prompt: enhanced, apiKey: apiKey)
+        case .falFluxPro:
+            return try await falGenerate(modelId: "fal-ai/flux-pro/v1.1", prompt: enhanced, apiKey: apiKey)
         case .gptImage1:
             if let photo = sourcePhoto {
                 return try await gptImageEdit(prompt: enhanced, apiKey: apiKey,
-                                              model: "gpt-image-1", source: photo)
+                                              model: "gpt-image-1.5", source: photo)
             }
-            return try await gptImageGen(prompt: enhanced, apiKey: apiKey, model: "gpt-image-1")
+            return try await gptImageGen(prompt: enhanced, apiKey: apiKey, model: "gpt-image-1.5")
         case .gptImage1Mini:
             if let photo = sourcePhoto {
                 return try await gptImageEdit(prompt: enhanced, apiKey: apiKey,
@@ -114,38 +119,77 @@ struct DallEService {
         return try decode(data)
     }
 
-    // MARK: - Nano Banana
+    // MARK: - fal.ai — Flux Schnell & Flux Pro
+    // Uses fal.ai's async queue: submit → poll status → fetch result.
+    // Images are returned as CDN URLs, so we download them after completion.
 
-    private func nanoBanana(prompt: String, apiKey: String) async throws -> (jpeg: Data, image: UIImage) {
-        let url = URL(string: "https://nanobanana.expert/api/v1/generate")!
-        var req = URLRequest(url: url)
+    private func falGenerate(modelId: String, prompt: String, apiKey: String) async throws -> (jpeg: Data, image: UIImage) {
+        // 1. Submit to queue
+        guard let submitURL = URL(string: "https://queue.fal.run/\(modelId)") else {
+            throw ImageGenError(message: "Invalid fal.ai model ID")
+        }
+        var req = URLRequest(url: submitURL)
         req.httpMethod = "POST"
-        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        req.setValue("Key \(apiKey)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "prompt": prompt,
+            "image_size": "landscape_16_9",
+            "num_images": 1,
+            "enable_safety_checker": false
+        ])
 
-        let body: [String: Any] = [
-            "prompt":        prompt,
-            "aspect_ratio":  "16:9",
-            "resolution":    "4k",
-            "output_format": "jpg"
-        ]
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (submitData, submitResp) = try await URLSession.shared.data(for: req)
+        try checkHTTP(submitResp, data: submitData)
 
-        let (data, response) = try await URLSession.shared.data(for: req)
-        try checkHTTP(response, data: data)
-
-        guard let json     = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let urlStr   = json["image_url"] as? String,
-              let imageURL = URL(string: urlStr) else {
-            throw ImageGenError(message: "No image_url in Nano Banana response")
+        guard let submitJSON = try? JSONSerialization.jsonObject(with: submitData) as? [String: Any],
+              let requestId = submitJSON["request_id"] as? String else {
+            throw ImageGenError(message: "No request_id in fal.ai response")
         }
 
-        let (imageData, _) = try await URLSession.shared.data(from: imageURL)
-        return try decode(imageData)
+        // 2. Poll until COMPLETED or FAILED (up to 60s)
+        let base = "https://queue.fal.run/\(modelId)/requests/\(requestId)"
+        guard let statusURL = URL(string: "\(base)/status") else {
+            throw ImageGenError(message: "Could not build fal.ai status URL")
+        }
+
+        for _ in 0..<30 {
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+
+            var pollReq = URLRequest(url: statusURL)
+            pollReq.setValue("Key \(apiKey)", forHTTPHeaderField: "Authorization")
+            guard let (sd, _) = try? await URLSession.shared.data(for: pollReq),
+                  let sj = try? JSONSerialization.jsonObject(with: sd) as? [String: Any],
+                  let status = sj["status"] as? String else { continue }
+
+            if status == "FAILED" {
+                let detail = sj["error"] as? String ?? "unknown error"
+                throw ImageGenError(message: "fal.ai generation failed: \(detail)")
+            }
+            guard status == "COMPLETED" else { continue }
+
+            // 3. Fetch result and download image
+            guard let resultURL = URL(string: base) else {
+                throw ImageGenError(message: "Could not build fal.ai result URL")
+            }
+            var resultReq = URLRequest(url: resultURL)
+            resultReq.setValue("Key \(apiKey)", forHTTPHeaderField: "Authorization")
+            let (resultData, resultResp) = try await URLSession.shared.data(for: resultReq)
+            try checkHTTP(resultResp, data: resultData)
+
+            guard let rj = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any],
+                  let images = rj["images"] as? [[String: Any]],
+                  let urlStr = images.first?["url"] as? String,
+                  let imageURL = URL(string: urlStr) else {
+                throw ImageGenError(message: "No image URL in fal.ai result")
+            }
+            let (imageData, _) = try await URLSession.shared.data(from: imageURL)
+            return try decode(imageData)
+        }
+        throw ImageGenError(message: "fal.ai request timed out after 60s")
     }
 
     // MARK: - GPT Image — text-to-image (generations endpoint)
-    // Both models return b64_json and support 1536×1024 landscape.
 
     private func gptImageGen(prompt: String, apiKey: String, model: String) async throws -> (jpeg: Data, image: UIImage) {
         let url = URL(string: "https://api.openai.com/v1/images/generations")!

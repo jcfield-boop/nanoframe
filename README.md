@@ -23,10 +23,10 @@
 
 ## Features
 
-- **Four image providers** — Pollinations.ai (free, no key), Nano Banana (native 4K), GPT Image 1 or GPT Image 1 Mini (OpenAI)
+- **Five image providers** — Pollinations.ai (free, no key), Flux Schnell or Flux Pro via fal.ai (fast/cheap), GPT Image 1.5 or GPT Image Mini (OpenAI)
 - **Source photo** *(iOS)* — supply a reference photo from your library, camera, or Files app; GPT Image 1/Mini incorporate it into the generated artwork via OpenAI's image-edits API (img2img)
 - **Frame TV optimised prompts** — every prompt is automatically enhanced with display-specific guidance (wide colour gamut, high contrast, matte anti-glare panel, no HDR) before being sent to the provider
-- **4K upscaling** — Pollinations and GPT Image outputs are upscaled to 3840×2160 before upload; Nano Banana returns native 4K
+- **4K upscaling** — all outputs are upscaled to 3840×2160 before upload if needed
 - **Push to Frame TV** — uploads over WebSocket on your local network; handles Samsung's pairing flow automatically
 - **Auto-revert** — optionally reverts to Samsung's art rotation after a configurable delay (5 min → 1 hour)
 - **Gallery** — every image sent to the TV is saved locally; browse, reload, resend, or delete from both the gallery and the TV
@@ -144,14 +144,15 @@ Auto-revert is handled by `WorkManager` — it schedules a background task that 
 
 ## Image providers
 
-| Provider | Key required | Resolution | Notes |
+| Provider | Key required | Price/image | Notes |
 |---|---|---|---|
-| **Pollinations** | None | 1792×1024 → 4K upscale | Free, Flux model |
-| **Nano Banana** | Yes ([nanobanana.expert](https://nanobanana.expert)) | Native 4K | No upscaling, sharpest on large screens |
-| **GPT Image 1** | Yes (OpenAI `sk-…`) | 1536×1024 → 4K upscale | High quality, best prompt fidelity |
-| **GPT Image 1 Mini** | Yes (OpenAI `sk-…`) | 1536×1024 → 4K upscale | Faster and cheaper than GPT Image 1 |
+| **Pollinations** | None | Free | Flux Schnell model, no rate limit |
+| **Flux Schnell** (fal.ai) | Yes (`fal-…`) | ~$0.003 | Fastest paid option, 2–4 s generation |
+| **Flux Pro** (fal.ai) | Yes (`fal-…`) | ~$0.04 | Top-tier quality, matches GPT Image 1.5 |
+| **GPT Image 1.5** | Yes (OpenAI `sk-…`) | ~$0.04 | Best prompt fidelity + source photo support |
+| **GPT Image Mini** | Yes (OpenAI `sk-…`) | ~$0.005 | Budget OpenAI option + source photo support |
 
-API keys are entered in Settings and stored on-device — never transmitted anywhere except directly to the chosen provider.
+Get a fal.ai key at [fal.ai](https://fal.ai) and an OpenAI key at [platform.openai.com](https://platform.openai.com). Keys are entered in Settings and stored on-device — never transmitted anywhere except directly to the chosen provider.
 
 ---
 
@@ -171,8 +172,8 @@ Supply a reference photo to guide image generation — a person, object, or scen
 
 | Provider | Source photo support |
 |---|---|
-| **GPT Image 1 / Mini** | Full — uses OpenAI `/v1/images/edits` multipart upload |
-| **Nano Banana** | Not supported — strip shown greyed-out with explanation |
+| **GPT Image 1.5 / Mini** | Full — uses OpenAI `/v1/images/edits` multipart upload |
+| **Flux Schnell / Pro** | Not supported — strip shown greyed-out with explanation |
 | **Pollinations** | Not supported — strip shown greyed-out with explanation |
 
 When a provider doesn't support source photos the picker buttons are visible but disabled with a one-line explanation. Switching providers does not clear a loaded photo — the user decides when to remove it.
