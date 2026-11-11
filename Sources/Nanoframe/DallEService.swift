@@ -8,21 +8,25 @@ struct ImageGenError: LocalizedError {
 }
 
 enum ImageProvider: String, CaseIterable {
-    case pollinations  = "pollinations"
-    case nanoBanana    = "nano-banana"
-    case gptImage1     = "gpt-image-1"
-    case gptImage1Mini = "gpt-image-1-mini"
+    case pollinations     = "pollinations"
+    case falFluxSchnell   = "fal-flux-schnell"
+    case falFluxPro       = "fal-flux-pro"
+    case gptImageSunburst = "gpt-image-2.5-sunburst"
+    case gptImageFlare    = "gpt-image-2.5-flare"
 
     var displayName: String {
         switch self {
-        case .pollinations:  return "Pollinations (free)"
-        case .nanoBanana:    return "Nano Banana"
-        case .gptImage1:     return "GPT Image 1 (OpenAI)"
-        case .gptImage1Mini: return "GPT Image 1 Mini (OpenAI)"
+        case .pollinations:     return "Pollinations (free)"
+        case .falFluxSchnell:   return "Flux Schnell — fal.ai"
+        case .falFluxPro:       return "Flux Pro — fal.ai"
+        case .gptImageSunburst: return "GPT Image 2.5 Sunburst — OpenAI (premium)"
+        case .gptImageFlare:    return "GPT Image 2.5 Flare — OpenAI (fast)"
         }
     }
 
     var needsKey: Bool { self != .pollinations }
+    var needsFalKey: Bool { self == .falFluxSchnell || self == .falFluxPro }
+    var needsOpenAIKey: Bool { self == .gptImageSunburst || self == .gptImageFlare }
 }
 
 struct DallEService {
@@ -32,10 +36,16 @@ struct DallEService {
     func generate(prompt: String, apiKey: String, provider: ImageProvider) async throws -> (jpeg: Data, image: NSImage) {
         let enhanced = Self.enhanceForFrameTV(prompt)
         switch provider {
-        case .pollinations:  return try await pollinations(prompt: enhanced)
-        case .nanoBanana:    return try await nanoBanana(prompt: enhanced, apiKey: apiKey)
-        case .gptImage1:     return try await gptImageGen(prompt: enhanced, apiKey: apiKey, model: "gpt-image-1")
-        case .gptImage1Mini: return try await gptImageGen(prompt: enhanced, apiKey: apiKey, model: "gpt-image-1-mini")
+        case .pollinations:
+            return try await pollinations(prompt: enhanced)
+        case .falFluxSchnell:
+            return try await falGenerate(modelId: "fal-ai/flux/schnell", prompt: enhanced, apiKey: apiKey)
+        case .falFluxPro:
+            return try await falGenerate(modelId: "fal-ai/flux-pro/v1.1", prompt: enhanced, apiKey: apiKey)
+        case .gptImageSunburst:
+            return try await gptImageGen(prompt: enhanced, apiKey: apiKey, model: provider.rawValue, quality: "high")
+        case .gptImageFlare:
+            return try await gptImageGen(prompt: enhanced, apiKey: apiKey, model: provider.rawValue, quality: "medium")
         }
     }
 
@@ -50,7 +60,7 @@ struct DallEService {
                "optimised for matte anti-glare display, no HDR, no lens flare"
     }
 
-    /// Only needed for OpenAI (1792×1024 → 3840×2160). Nano Banana returns 4K natively.
+    /// Only needed when a provider returns smaller than 4K; fal.ai and GPT Image are upscaled here.
     func upscaleTo4K(_ jpegData: Data) -> Data? {
         guard let ci = CIImage(data: jpegData) else { return nil }
         let src = ci.extent.size
@@ -78,40 +88,77 @@ struct DallEService {
         return try decode(data)
     }
 
-    // MARK: - Nano Banana (nanobanana.expert)
+    // MARK: - fal.ai — Flux Schnell & Flux Pro
+    // Uses fal.ai's async queue: submit → poll status → fetch result.
+    // Images are returned as CDN URLs, so we download them after completion.
 
-    private func nanoBanana(prompt: String, apiKey: String) async throws -> (jpeg: Data, image: NSImage) {
-        let url = URL(string: "https://nanobanana.expert/api/v1/generate")!
-        var req = URLRequest(url: url)
+    private func falGenerate(modelId: String, prompt: String, apiKey: String) async throws -> (jpeg: Data, image: NSImage) {
+        guard let submitURL = URL(string: "https://queue.fal.run/\(modelId)") else {
+            throw ImageGenError(message: "Invalid fal.ai model ID")
+        }
+        var req = URLRequest(url: submitURL)
         req.httpMethod = "POST"
-        req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        req.setValue("Key \(apiKey)", forHTTPHeaderField: "Authorization")
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.httpBody = try JSONSerialization.data(withJSONObject: [
+            "prompt": prompt,
+            "image_size": "landscape_16_9",
+            "num_images": 1,
+            "enable_safety_checker": false
+        ])
 
-        let body: [String: Any] = [
-            "prompt":        prompt,
-            "aspect_ratio":  "16:9",
-            "resolution":    "4k",         // native 4K — no upscaling needed
-            "output_format": "jpg"
-        ]
-        req.httpBody = try JSONSerialization.data(withJSONObject: body)
+        let (submitData, submitResp) = try await URLSession.shared.data(for: req)
+        try checkHTTP(submitResp, data: submitData)
 
-        let (data, response) = try await URLSession.shared.data(for: req)
-        try checkHTTP(response, data: data)
-
-        guard let json     = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let urlStr   = json["image_url"] as? String,
-              let imageURL = URL(string: urlStr) else {
-            throw ImageGenError(message: "No image_url in Nano Banana response")
+        guard let submitJSON = try? JSONSerialization.jsonObject(with: submitData) as? [String: Any],
+              let requestId = submitJSON["request_id"] as? String else {
+            throw ImageGenError(message: "No request_id in fal.ai response")
         }
 
-        let (imageData, _) = try await URLSession.shared.data(from: imageURL)
-        return try decode(imageData)
+        let base = "https://queue.fal.run/\(modelId)/requests/\(requestId)"
+        guard let statusURL = URL(string: "\(base)/status") else {
+            throw ImageGenError(message: "Could not build fal.ai status URL")
+        }
+
+        for _ in 0..<30 {
+            try await Task.sleep(nanoseconds: 2_000_000_000)
+
+            var pollReq = URLRequest(url: statusURL)
+            pollReq.setValue("Key \(apiKey)", forHTTPHeaderField: "Authorization")
+            guard let (sd, _) = try? await URLSession.shared.data(for: pollReq),
+                  let sj = try? JSONSerialization.jsonObject(with: sd) as? [String: Any],
+                  let status = sj["status"] as? String else { continue }
+
+            if status == "FAILED" {
+                let detail = sj["error"] as? String ?? "unknown error"
+                throw ImageGenError(message: "fal.ai generation failed: \(detail)")
+            }
+            guard status == "COMPLETED" else { continue }
+
+            guard let resultURL = URL(string: base) else {
+                throw ImageGenError(message: "Could not build fal.ai result URL")
+            }
+            var resultReq = URLRequest(url: resultURL)
+            resultReq.setValue("Key \(apiKey)", forHTTPHeaderField: "Authorization")
+            let (resultData, resultResp) = try await URLSession.shared.data(for: resultReq)
+            try checkHTTP(resultResp, data: resultData)
+
+            guard let rj = try? JSONSerialization.jsonObject(with: resultData) as? [String: Any],
+                  let images = rj["images"] as? [[String: Any]],
+                  let urlStr = images.first?["url"] as? String,
+                  let imageURL = URL(string: urlStr) else {
+                throw ImageGenError(message: "No image URL in fal.ai result")
+            }
+            let (imageData, _) = try await URLSession.shared.data(from: imageURL)
+            return try decode(imageData)
+        }
+        throw ImageGenError(message: "fal.ai request timed out after 60s")
     }
 
-    // MARK: - GPT Image (gpt-image-1 and gpt-image-1-mini)
-    // Both return b64_json at 1536×1024 landscape. Mini uses medium quality.
+    // MARK: - GPT Image (gpt-image-2.5-sunburst and gpt-image-2.5-flare)
+    // Both return b64_json; we request 1536×1024 landscape and upscale to 4K.
 
-    private func gptImageGen(prompt: String, apiKey: String, model: String) async throws -> (jpeg: Data, image: NSImage) {
+    private func gptImageGen(prompt: String, apiKey: String, model: String, quality: String) async throws -> (jpeg: Data, image: NSImage) {
         let url = URL(string: "https://api.openai.com/v1/images/generations")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -123,7 +170,7 @@ struct DallEService {
             "prompt":             prompt,
             "n":                  1,
             "size":               "1536x1024",
-            "quality":            model.hasSuffix("mini") ? "medium" : "high",
+            "quality":            quality,
             "output_format":      "jpeg",
             "output_compression": 92
         ]

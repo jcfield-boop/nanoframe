@@ -8,36 +8,36 @@ struct ImageGenError: LocalizedError {
 }
 
 enum ImageProvider: String, CaseIterable {
-    case pollinations   = "pollinations"
-    case falFluxSchnell = "fal-flux-schnell"
-    case falFluxPro     = "fal-flux-pro"
-    case gptImage1      = "gpt-image-1"
-    case gptImage1Mini  = "gpt-image-1-mini"
+    case pollinations     = "pollinations"
+    case falFluxSchnell   = "fal-flux-schnell"
+    case falFluxPro       = "fal-flux-pro"
+    case gptImageSunburst = "gpt-image-2.5-sunburst"
+    case gptImageFlare    = "gpt-image-2.5-flare"
 
     var displayName: String {
         switch self {
-        case .pollinations:   return "Pollinations (free)"
-        case .falFluxSchnell: return "Flux Schnell — fal.ai (~$0.003)"
-        case .falFluxPro:     return "Flux Pro — fal.ai (~$0.04)"
-        case .gptImage1:      return "GPT Image 1.5 — OpenAI (~$0.04)"
-        case .gptImage1Mini:  return "GPT Image Mini — OpenAI (~$0.005)"
+        case .pollinations:     return "Pollinations (free)"
+        case .falFluxSchnell:   return "Flux Schnell — fal.ai"
+        case .falFluxPro:       return "Flux Pro — fal.ai"
+        case .gptImageSunburst: return "GPT Image 2.5 Sunburst — OpenAI (premium)"
+        case .gptImageFlare:    return "GPT Image 2.5 Flare — OpenAI (fast)"
         }
     }
 
     var needsKey: Bool { self != .pollinations }
     var needsFalKey: Bool { self == .falFluxSchnell || self == .falFluxPro }
-    var needsOpenAIKey: Bool { self == .gptImage1 || self == .gptImage1Mini }
+    var needsOpenAIKey: Bool { self == .gptImageSunburst || self == .gptImageFlare }
 
     var supportsSourcePhoto: Bool {
         switch self {
-        case .gptImage1, .gptImage1Mini: return true
+        case .gptImageSunburst, .gptImageFlare: return true
         default: return false
         }
     }
 
     var sourcePhotoUnavailableReason: String {
         switch self {
-        case .gptImage1, .gptImage1Mini: return ""
+        case .gptImageSunburst, .gptImageFlare: return ""
         case .pollinations:   return "Pollinations uses a URL-based API that can't receive image uploads."
         case .falFluxSchnell,
              .falFluxPro:     return "Switch to a GPT Image provider to use a source photo."
@@ -63,18 +63,18 @@ struct DallEService {
             return try await falGenerate(modelId: "fal-ai/flux/schnell", prompt: enhanced, apiKey: apiKey)
         case .falFluxPro:
             return try await falGenerate(modelId: "fal-ai/flux-pro/v1.1", prompt: enhanced, apiKey: apiKey)
-        case .gptImage1:
+        case .gptImageSunburst:
             if let photo = sourcePhoto {
                 return try await gptImageEdit(prompt: enhanced, apiKey: apiKey,
-                                              model: "gpt-image-1.5", source: photo)
+                                              model: provider.rawValue, quality: "high", source: photo)
             }
-            return try await gptImageGen(prompt: enhanced, apiKey: apiKey, model: "gpt-image-1.5")
-        case .gptImage1Mini:
+            return try await gptImageGen(prompt: enhanced, apiKey: apiKey, model: provider.rawValue, quality: "high")
+        case .gptImageFlare:
             if let photo = sourcePhoto {
                 return try await gptImageEdit(prompt: enhanced, apiKey: apiKey,
-                                              model: "gpt-image-1-mini", source: photo)
+                                              model: provider.rawValue, quality: "medium", source: photo)
             }
-            return try await gptImageGen(prompt: enhanced, apiKey: apiKey, model: "gpt-image-1-mini")
+            return try await gptImageGen(prompt: enhanced, apiKey: apiKey, model: provider.rawValue, quality: "medium")
         }
     }
 
@@ -87,6 +87,40 @@ struct DallEService {
                "rich saturated colors, high contrast, sharp fine detail, " +
                "professional photography or museum-quality art print, " +
                "optimised for matte anti-glare display, no HDR, no lens flare"
+    }
+
+    /// Center-crops a photo of arbitrary aspect ratio to 16:9 and scales it to fill the Frame
+    /// TV's 3840×2160 canvas exactly — for uploading a library photo directly, with no AI
+    /// generation involved. Crops the longer dimension rather than letterboxing, since a photo
+    /// with black bars looks wrong as "art" on the Frame.
+    static func fitToFrame(_ image: UIImage, target: CGSize = CGSize(width: 3840, height: 2160)) -> (jpeg: Data, image: UIImage)? {
+        let size = image.size
+        guard size.width > 0, size.height > 0 else { return nil }
+
+        let targetAspect = target.width / target.height
+        let srcAspect = size.width / size.height
+        let cropRect: CGRect
+        if srcAspect > targetAspect {
+            let cropWidth = size.height * targetAspect
+            cropRect = CGRect(x: (size.width - cropWidth) / 2, y: 0, width: cropWidth, height: size.height)
+        } else {
+            let cropHeight = size.width / targetAspect
+            cropRect = CGRect(x: 0, y: (size.height - cropHeight) / 2, width: size.width, height: cropHeight)
+        }
+        let scale = target.width / cropRect.width
+
+        let renderer = UIGraphicsImageRenderer(size: target)
+        let fitted = renderer.image { _ in
+            let drawRect = CGRect(
+                x: -cropRect.minX * scale,
+                y: -cropRect.minY * scale,
+                width: size.width * scale,
+                height: size.height * scale
+            )
+            image.draw(in: drawRect)
+        }
+        guard let jpeg = fitted.jpegData(compressionQuality: 0.92) else { return nil }
+        return (jpeg, fitted)
     }
 
     /// Upscales to 3840×2160 if the image is smaller. Returns nil on failure (caller keeps original).
@@ -191,7 +225,7 @@ struct DallEService {
 
     // MARK: - GPT Image — text-to-image (generations endpoint)
 
-    private func gptImageGen(prompt: String, apiKey: String, model: String) async throws -> (jpeg: Data, image: UIImage) {
+    private func gptImageGen(prompt: String, apiKey: String, model: String, quality: String) async throws -> (jpeg: Data, image: UIImage) {
         let url = URL(string: "https://api.openai.com/v1/images/generations")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -203,7 +237,7 @@ struct DallEService {
             "prompt":             prompt,
             "n":                  1,
             "size":               "1536x1024",
-            "quality":            model.hasSuffix("mini") ? "medium" : "high",
+            "quality":            quality,
             "output_format":      "jpeg",
             "output_compression": 92
         ]
@@ -224,7 +258,7 @@ struct DallEService {
     // MARK: - GPT Image — image-to-image (edits endpoint)
     // Sends the source photo as multipart form-data; the model repaints it according to the prompt.
 
-    private func gptImageEdit(prompt: String, apiKey: String, model: String,
+    private func gptImageEdit(prompt: String, apiKey: String, model: String, quality: String,
                                source: UIImage) async throws -> (jpeg: Data, image: UIImage) {
         guard let imageData = prepareSourceImage(source) else {
             throw ImageGenError(message: "Could not prepare source image for upload")
@@ -245,7 +279,7 @@ struct DallEService {
                 (name: "prompt",  value: prompt),
                 (name: "n",       value: "1"),
                 (name: "size",    value: "1536x1024"),
-                (name: "quality", value: model.hasSuffix("mini") ? "medium" : "high")
+                (name: "quality", value: quality)
             ],
             fileField: "image",
             filename:  "source.jpg",

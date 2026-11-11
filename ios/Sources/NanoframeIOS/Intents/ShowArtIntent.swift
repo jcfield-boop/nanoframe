@@ -28,7 +28,7 @@ struct ShowArtOnFrameIntent: AppIntent {
         let provider    = ImageProvider(rawValue: providerRaw) ?? .pollinations
         let apiKey: String
         switch provider {
-        case .gptImage1, .gptImage1Mini: apiKey = UserDefaults.standard.string(forKey: "openai_api_key") ?? ""
+        case .gptImageSunburst, .gptImageFlare: apiKey = UserDefaults.standard.string(forKey: "openai_api_key") ?? ""
         case .falFluxSchnell, .falFluxPro: apiKey = UserDefaults.standard.string(forKey: "fal_api_key") ?? ""
         case .pollinations:              apiKey = ""
         }

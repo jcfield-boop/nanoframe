@@ -52,7 +52,7 @@ targets:
       path: NanoframeIOS.entitlements
     settings:
       base:
-        DEVELOPMENT_TEAM: ""     # fill in your Team ID
+        DEVELOPMENT_TEAM: P3CYZYY6GH
         CODE_SIGN_STYLE: Automatic
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor

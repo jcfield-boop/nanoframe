@@ -14,6 +14,30 @@ class AppViewModel: ObservableObject {
     @Published var tvLog: [String] = []
     @Published var remoteBanner: String?
     @Published var revertAt: Date? = nil
+    @Published var isScanningForTV = false
+    @Published var discoveredTVs: [DiscoveredTV] = []
+    @Published var tvScanMessage: String?
+
+    func scanForTV() {
+        guard !isScanningForTV else { return }
+        isScanningForTV = true
+        tvScanMessage = nil
+        discoveredTVs = []
+        Task { [weak self] in
+            let found = await FrameTVDiscovery.scan()
+            guard let self else { return }
+            self.isScanningForTV = false
+            self.discoveredTVs = found
+            if found.count == 1 {
+                self.tvIP = found[0].ip
+                self.tvScanMessage = "✓ Found \"\(found[0].name)\" (\(found[0].ip)) — using automatically"
+            } else if found.isEmpty {
+                self.tvScanMessage = "No Frame TV found on this Wi-Fi — enter the IP manually"
+            } else {
+                self.tvScanMessage = "Found \(found.count) TVs — pick one below"
+            }
+        }
+    }
 
     /// Content IDs uploaded by Nanoframe, persisted so revert works across app restarts.
     var uploadedContentIds: [String] {
@@ -76,9 +100,9 @@ class AppViewModel: ObservableObject {
         get { UserDefaults.standard.string(forKey: "openai_api_key") ?? "" }
         set { UserDefaults.standard.set(newValue, forKey: "openai_api_key") }
     }
-    var nbKey: String {
-        get { UserDefaults.standard.string(forKey: "nb_api_key") ?? "" }
-        set { UserDefaults.standard.set(newValue, forKey: "nb_api_key") }
+    var falKey: String {
+        get { UserDefaults.standard.string(forKey: "fal_api_key") ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: "fal_api_key") }
     }
     var tvIP: String {
         get { UserDefaults.standard.string(forKey: "tv_ip") ?? "192.168.0.24" }
@@ -95,10 +119,11 @@ class AppViewModel: ObservableObject {
 
     var activeKey: String {
         switch provider {
-        case .pollinations:  return "free"
-        case .nanoBanana:    return nbKey
-        case .gptImage1:     return apiKey
-        case .gptImage1Mini: return apiKey
+        case .pollinations:     return "free"
+        case .falFluxSchnell:   return falKey
+        case .falFluxPro:       return falKey
+        case .gptImageSunburst: return apiKey
+        case .gptImageFlare:    return apiKey
         }
     }
 
@@ -392,7 +417,7 @@ struct ContentView: View {
                                 .stroke(Color.secondary.opacity(0.25), lineWidth: 1))
 
                         if vm.activeKey.isEmpty {
-                            Label("Add your \(vm.provider == .nanoBanana ? "Nano Banana" : "OpenAI") key in Settings",
+                            Label("Add your \(vm.provider.needsFalKey ? "fal.ai" : "OpenAI") key in Settings",
                                   systemImage: "exclamationmark.triangle.fill")
                                 .font(.caption)
                                 .foregroundStyle(.orange)
@@ -626,7 +651,7 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
 
     var provider:       Binding<ImageProvider> { Binding(get: { vm.provider       }, set: { vm.provider       = $0 }) }
-    var nbKey:          Binding<String>        { Binding(get: { vm.nbKey          }, set: { vm.nbKey          = $0 }) }
+    var falKey:         Binding<String>        { Binding(get: { vm.falKey         }, set: { vm.falKey         = $0 }) }
     var apiKey:         Binding<String>        { Binding(get: { vm.apiKey         }, set: { vm.apiKey         = $0 }) }
     var tvIP:           Binding<String>        { Binding(get: { vm.tvIP           }, set: { vm.tvIP           = $0 }) }
     var autoRevert:     Binding<Bool>          { Binding(get: { vm.autoRevert     }, set: { vm.autoRevert     = $0 }) }
@@ -650,26 +675,26 @@ struct SettingsView: View {
                             case .pollinations:
                                 Label("No API key required — just generate!", systemImage: "checkmark.circle.fill")
                                     .font(.caption).foregroundStyle(.green)
-                            case .nanoBanana:
+                            case .falFluxSchnell, .falFluxPro:
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text("Nano Banana API Key").font(.caption).foregroundStyle(.secondary)
-                                    SecureField("nb_…", text: nbKey).textFieldStyle(.roundedBorder)
-                                    Link("Get a key → nanobanana.expert",
-                                         destination: URL(string: "https://nanobanana.expert")!)
+                                    Text("fal.ai API Key").font(.caption).foregroundStyle(.secondary)
+                                    SecureField("key_…", text: falKey).textFieldStyle(.roundedBorder)
+                                    Link("Get a key → fal.ai/dashboard/keys",
+                                         destination: URL(string: "https://fal.ai/dashboard/keys")!)
                                         .font(.caption2)
                                 }
-                            case .gptImage1:
+                            case .gptImageSunburst:
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("OpenAI API Key").font(.caption).foregroundStyle(.secondary)
                                     SecureField("sk-…", text: apiKey).textFieldStyle(.roundedBorder)
-                                    Text("GPT Image 1 · 1536×1024 · quality: high")
+                                    Text("GPT Image 2.5 Sunburst · 1536×1024 · quality: high")
                                         .font(.caption2).foregroundStyle(.secondary)
                                 }
-                            case .gptImage1Mini:
+                            case .gptImageFlare:
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text("OpenAI API Key").font(.caption).foregroundStyle(.secondary)
                                     SecureField("sk-…", text: apiKey).textFieldStyle(.roundedBorder)
-                                    Text("GPT Image 1 Mini · 1536×1024 · faster & cheaper")
+                                    Text("GPT Image 2.5 Flare · 1536×1024 · faster")
                                         .font(.caption2).foregroundStyle(.secondary)
                                 }
                             }
@@ -681,7 +706,38 @@ struct SettingsView: View {
                         VStack(alignment: .leading, spacing: 8) {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("TV IP Address").font(.caption).foregroundStyle(.secondary)
-                                TextField("192.168.0.24", text: tvIP).textFieldStyle(.roundedBorder)
+                                HStack {
+                                    TextField("192.168.0.24", text: tvIP).textFieldStyle(.roundedBorder)
+                                    Button {
+                                        vm.scanForTV()
+                                    } label: {
+                                        if vm.isScanningForTV {
+                                            ProgressView().controlSize(.small)
+                                        } else {
+                                            Label("Find TV", systemImage: "wifi")
+                                        }
+                                    }
+                                    .disabled(vm.isScanningForTV)
+                                }
+                                if let message = vm.tvScanMessage {
+                                    Text(message).font(.caption2).foregroundStyle(.secondary)
+                                }
+                                if vm.discoveredTVs.count > 1 {
+                                    ForEach(vm.discoveredTVs) { tv in
+                                        Button {
+                                            vm.tvIP = tv.ip
+                                            vm.tvScanMessage = "✓ Using \"\(tv.name)\" (\(tv.ip))"
+                                        } label: {
+                                            HStack {
+                                                Text(tv.name)
+                                                Spacer()
+                                                Text(tv.ip).foregroundStyle(.secondary)
+                                            }
+                                        }
+                                        .buttonStyle(.plain)
+                                        .font(.caption)
+                                    }
+                                }
                             }
                             Divider()
                             Toggle(isOn: autoRevert) {

@@ -1,12 +1,17 @@
 import Foundation
 
-/// Listens on 0.0.0.0:11436 (IPv4) for POST /generate {"prompt":"..."}
+/// Listens on 0.0.0.0:11438 (IPv4) for POST /generate {"prompt":"..."}
 /// Used by the Lango ESP32 tool_frame_tv to trigger generation remotely.
 ///
 /// NWListener creates an IPv6-only socket on macOS, which the ESP32 (IPv4) cannot reach.
 /// This implementation uses plain POSIX sockets so it binds explicitly to INADDR_ANY (IPv4).
+///
+/// Port 11436 was previously shared with a local MLX LLM server
+/// (mlx_lm.server), which won the bind race on every Mac restart and left
+/// Nanoframe's own listener dead — hence the long-running 404 outage.
+/// Moved to 11438, which nothing else on this Mac binds to.
 class RemoteTriggerServer {
-    static let port: UInt16 = 11436
+    static let port: UInt16 = 11438
     private var serverFD: Int32 = -1
     private var running = false
     private let onPrompt: (String) -> Void

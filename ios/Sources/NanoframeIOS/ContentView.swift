@@ -19,6 +19,30 @@ class AppViewModel: ObservableObject {
     @Published var tvLog: [String] = []
     @Published var revertAt: Date? = nil
     @Published var sourcePhoto: UIImage?
+    @Published var isScanningForTV = false
+    @Published var discoveredTVs: [DiscoveredTV] = []
+    @Published var tvScanMessage: String?
+
+    func scanForTV() {
+        guard !isScanningForTV else { return }
+        isScanningForTV = true
+        tvScanMessage = nil
+        discoveredTVs = []
+        Task { [weak self] in
+            let found = await FrameTVDiscovery.scan()
+            guard let self else { return }
+            self.isScanningForTV = false
+            self.discoveredTVs = found
+            if found.count == 1 {
+                self.tvIP = found[0].ip
+                self.tvScanMessage = "✓ Found \"\(found[0].name)\" (\(found[0].ip)) — using automatically"
+            } else if found.isEmpty {
+                self.tvScanMessage = "No Frame TV found on this Wi-Fi — enter the IP manually"
+            } else {
+                self.tvScanMessage = "Found \(found.count) TVs — pick one below"
+            }
+        }
+    }
 
     // MARK: Persisted settings
     // @Published so SwiftUI re-renders when picker/toggle values change.
@@ -92,8 +116,8 @@ class AppViewModel: ObservableObject {
         case .pollinations:             return "free"
         case .falFluxSchnell,
              .falFluxPro:              return falKey
-        case .gptImage1,
-             .gptImage1Mini:           return apiKey
+        case .gptImageSunburst,
+             .gptImageFlare:          return apiKey
         }
     }
 
@@ -171,6 +195,20 @@ class AppViewModel: ObservableObject {
             uploadProgress = 0
             phase = .ready
         }
+    }
+
+    /// Uses a photo straight from the library as the Frame TV image — no AI generation.
+    /// Crops to 16:9 and scales to 4K so it fills the Frame correctly.
+    func useLibraryPhoto(_ image: UIImage) {
+        cancelRevert()
+        errorMessage = nil
+        guard let (jpeg, fitted) = DallEService.fitToFrame(image) else {
+            errorMessage = "Could not fit that photo to the Frame TV's aspect ratio."
+            return
+        }
+        imageData = jpeg
+        generatedImage = fitted
+        phase = .ready
     }
 
     func selectOnTV(contentId: String) async {
@@ -308,6 +346,7 @@ struct ContentView: View {
     @State private var photoPickerItem: PhotosPickerItem?
     @State private var showCameraPicker = false
     @State private var showFilePicker  = false
+    @State private var libraryPhotoItem: PhotosPickerItem?
     @FocusState private var promptFocused: Bool
 
     var body: some View {
@@ -317,6 +356,7 @@ struct ContentView: View {
                     imageCard
                     sourcePhotoStrip
                     promptSection
+                    libraryUploadButton
                     actionButtons
                     statusSection
                     if vm.showDebugLog && !vm.tvLog.isEmpty {
@@ -569,6 +609,28 @@ struct ContentView: View {
         }
     }
 
+    // MARK: Library Upload (send a photo directly — no AI generation)
+
+    private var libraryUploadButton: some View {
+        PhotosPicker(selection: $libraryPhotoItem, matching: .images) {
+            Label("Use a Photo from Library Instead", systemImage: "photo.on.rectangle.angled")
+                .font(.subheadline.bold())
+                .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.bordered)
+        .disabled(vm.phase.isWorking)
+        .onChange(of: libraryPhotoItem) { newItem in
+            guard let newItem else { return }
+            Task {
+                if let data = try? await newItem.loadTransferable(type: Data.self),
+                   let image = UIImage(data: data) {
+                    vm.useLibraryPhoto(image)
+                }
+                libraryPhotoItem = nil
+            }
+        }
+    }
+
     // MARK: Action Buttons
 
     private var actionButtons: some View {
@@ -684,10 +746,40 @@ struct SettingsView: View {
                         .keyboardType(.decimalPad)
                         .autocorrectionDisabled()
                     }
+                    Button {
+                        vm.scanForTV()
+                    } label: {
+                        HStack {
+                            if vm.isScanningForTV {
+                                ProgressView().controlSize(.small)
+                                Text("Searching for TVs on Wi-Fi…")
+                            } else {
+                                Label("Find TV on Wi-Fi", systemImage: "wifi")
+                            }
+                        }
+                    }
+                    .disabled(vm.isScanningForTV)
+                    if let message = vm.tvScanMessage {
+                        Text(message).font(.caption).foregroundStyle(.secondary)
+                    }
+                    if vm.discoveredTVs.count > 1 {
+                        ForEach(vm.discoveredTVs) { tv in
+                            Button {
+                                vm.tvIP = tv.ip
+                                vm.tvScanMessage = "✓ Using \"\(tv.name)\" (\(tv.ip))"
+                            } label: {
+                                HStack {
+                                    Text(tv.name).foregroundStyle(.primary)
+                                    Spacer()
+                                    Text(tv.ip).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
                 } header: {
                     Text("Samsung Frame TV")
                 } footer: {
-                    Text("Find it on the TV: Settings → General → Network → IP Settings")
+                    Text("Make sure your phone is on the same Wi-Fi as the TV, then tap Find TV. You can also enter the IP manually: Settings → General → Network → IP Settings on the TV.")
                 }
 
                 // Provider
