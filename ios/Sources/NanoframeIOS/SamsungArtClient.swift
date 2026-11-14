@@ -94,32 +94,55 @@ class SamsungArtClient: NSObject {
         }
     }
 
+    /// 2022+ Frame TVs (including 2026 models) only expose the art-mode channel on the
+    /// encrypted port 8002 (wss); pre-2022 sets (e.g. the LS03A this was originally built
+    /// against) only have the plaintext channel on 8001. Try the modern port first and
+    /// fall back, since plain port-8001 reachability (used by discovery) doesn't tell us
+    /// which channel the TV's firmware actually serves.
+    private static let connectAttempts: [(scheme: String, port: Int)] = [("wss", 8002), ("ws", 8001)]
+
     func connect() async throws {
         let appName = Data("Nanoframe".utf8).base64EncodedString()
-        var comps = URLComponents()
-        comps.scheme  = "ws"
-        comps.host    = host
-        comps.port    = 8001
-        comps.path    = "/api/v2/channels/com.samsung.art-app"
-        comps.queryItems = [URLQueryItem(name: "name", value: appName)]
-        if !token.isEmpty {
-            comps.queryItems?.append(URLQueryItem(name: "token", value: token))
-        }
-        guard let url = comps.url else { throw ArtError.invalidURL }
 
-        urlSession    = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
-        webSocketTask = urlSession?.webSocketTask(with: url)
-        webSocketTask?.resume()
-
-        let raw = try await receiveRaw(timeout: 10)
-        if let d    = raw.data(using: .utf8),
-           let json = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-           let info = json["data"] as? [String: Any] {
-            token    = info["token"] as? String ?? token
-            clientId = info["id"]    as? String ?? clientId
+        func buildURL(scheme: String, port: Int) -> URL? {
+            var comps = URLComponents()
+            comps.scheme = scheme
+            comps.host   = host
+            comps.port   = port
+            comps.path   = "/api/v2/channels/com.samsung.art-app"
+            comps.queryItems = [URLQueryItem(name: "name", value: appName)]
+            if !token.isEmpty {
+                comps.queryItems?.append(URLQueryItem(name: "token", value: token))
+            }
+            return comps.url
         }
-        onRawMessage?("→ connected: clientId=\(clientId)")
-        _ = try? await receiveRaw(timeout: 3)
+
+        var lastError: Error = ArtError.tvUnreachable
+        for attempt in Self.connectAttempts {
+            guard let url = buildURL(scheme: attempt.scheme, port: attempt.port) else { continue }
+
+            urlSession    = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+            webSocketTask = urlSession?.webSocketTask(with: url)
+            webSocketTask?.resume()
+
+            do {
+                let raw = try await receiveRaw(timeout: 10)
+                if let d    = raw.data(using: .utf8),
+                   let json = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                   let info = json["data"] as? [String: Any] {
+                    token    = info["token"] as? String ?? token
+                    clientId = info["id"]    as? String ?? clientId
+                }
+                onRawMessage?("→ connected via \(attempt.scheme):\(attempt.port), clientId=\(clientId)")
+                _ = try? await receiveRaw(timeout: 3)
+                return
+            } catch {
+                lastError = error
+                webSocketTask?.cancel(with: .goingAway, reason: nil)
+                webSocketTask = nil
+            }
+        }
+        throw lastError
     }
 
     func uploadAndDisplay(_ jpegData: Data) async throws -> String {
