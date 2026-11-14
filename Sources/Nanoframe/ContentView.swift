@@ -324,10 +324,9 @@ class AppViewModel: ObservableObject {
 // MARK: - ContentView
 
 struct ContentView: View {
-    @StateObject private var vm = AppViewModel()
+    @ObservedObject var vm: AppViewModel
     @State private var showHelp    = false
     @State private var showGallery = false
-    @State private var server: RemoteTriggerServer?
 
     // Opens Settings as a standalone NSWindow so it is never clipped by the main window.
     private func openSettings() {
@@ -368,11 +367,11 @@ struct ContentView: View {
             Text(vm.errorMessage ?? "")
         }
         .onAppear {
-            startServer()
-            // Bring window to front when launched from the terminal
+            // Bring window to front when launched from the terminal.
+            // The LAN trigger server starts from the app delegate, not here —
+            // it must run whether or not this window ever appears.
             NSApp.activate(ignoringOtherApps: true)
         }
-        .onDisappear { server?.stop() }
     }
 
     // MARK: - Sidebar
@@ -632,16 +631,6 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Trigger server
-
-    private func startServer() {
-        let s = RemoteTriggerServer { [weak vm] prompt in
-            guard let vm else { return }
-            Task { await vm.generateAndSend(prompt: prompt) }
-        }
-        s.start()
-        server = s
-    }
 }
 
 // MARK: - Settings

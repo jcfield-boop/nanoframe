@@ -23,7 +23,7 @@ class RemoteTriggerServer {
     func start() {
         let fd = socket(AF_INET, SOCK_STREAM, 0)
         guard fd >= 0 else {
-            print("⚠️  RemoteTriggerServer: socket() failed — errno \(errno)")
+            NSLog("⚠️  RemoteTriggerServer: socket() failed — errno \(errno)")
             return
         }
 
@@ -45,19 +45,19 @@ class RemoteTriggerServer {
         }
         guard bound == 0 else {
             close(fd)
-            print("⚠️  RemoteTriggerServer: bind() failed — port \(Self.port) may be in use (errno \(errno))")
+            NSLog("⚠️  RemoteTriggerServer: bind() failed — port \(Self.port) may be in use (errno \(errno))")
             return
         }
 
         guard listen(fd, 8) == 0 else {
             close(fd)
-            print("⚠️  RemoteTriggerServer: listen() failed — errno \(errno)")
+            NSLog("⚠️  RemoteTriggerServer: listen() failed — errno \(errno)")
             return
         }
 
         serverFD = fd
         running  = true
-        print("✅  RemoteTriggerServer listening on 0.0.0.0:\(Self.port) (IPv4)")
+        NSLog("✅  RemoteTriggerServer listening on 0.0.0.0:\(Self.port) (IPv4)")
 
         DispatchQueue.global(qos: .utility).async { [weak self] in
             self?.acceptLoop()
