@@ -1,5 +1,18 @@
 import Foundation
 import Network
+import Security
+
+/// One-shot gate so an NWConnection continuation is resumed exactly once.
+private final class D2DGate: @unchecked Sendable {
+    private var fired = false
+    private let lock  = NSLock()
+    func fire(_ body: () -> Void) {
+        lock.lock(); defer { lock.unlock() }
+        guard !fired else { return }
+        fired = true
+        body()
+    }
+}
 
 /// Thread-safe one-shot gate: the first caller to `fire` wins; subsequent calls are no-ops.
 /// Used in NWConnection state handlers to ensure a CheckedContinuation is resumed exactly once.
@@ -129,10 +142,11 @@ class SamsungArtClient: NSObject {
         ] as [String: Any])
 
         onProgress?("Waiting for TV upload port…")
-        let (port, secKey) = try await waitForReadyToUse(timeout: 20)
+        let slot = try await waitForReadyToUse(timeout: 20)
 
         onProgress?("Uploading image via TCP…")
-        try await tcpUpload(jpegData, port: port, secKey: secKey)
+        try await tcpUpload(jpegData, port: slot.port, secKey: slot.secKey,
+                            secured: slot.secured, ip: slot.ip)
 
         onProgress?("Waiting for TV to process image…")
         guard let idResp = try? await waitForEvent("image_added", timeout: 30) else {
@@ -270,7 +284,8 @@ class SamsungArtClient: NSObject {
         throw ArtError.timeout
     }
 
-    private func waitForReadyToUse(timeout: TimeInterval) async throws -> (port: Int, secKey: String) {
+    private func waitForReadyToUse(timeout: TimeInterval) async throws
+        -> (port: Int, secKey: String, secured: Bool, ip: String?) {
         let deadline = Date().addingTimeInterval(timeout)
         while Date() < deadline {
             let remaining = deadline.timeIntervalSinceNow
@@ -293,8 +308,17 @@ class SamsungArtClient: NSObject {
             let portStr = info["port"] as? String ?? "\(info["port"] ?? "")"
             guard let port = Int(portStr), port > 0 else { throw ArtError.noUploadPort }
             let secKey = info["key"] as? String ?? ""
-            onRawMessage?("→ ready_to_use: port=\(port) key=\(secKey.prefix(8))…")
-            return (port, secKey)
+            // "secured" arrives as a JSON bool on current firmware; tolerate "true"/1 too.
+            let secured: Bool
+            switch info["secured"] {
+            case let b as Bool:   secured = b
+            case let s as String: secured = (s as NSString).boolValue
+            case let n as NSNumber: secured = n.boolValue
+            default:              secured = false
+            }
+            let ip = info["ip"] as? String
+            onRawMessage?("→ ready_to_use: ip=\(ip ?? host) port=\(port) secured=\(secured) key=\(secKey.prefix(8))…")
+            return (port, secKey, secured, ip)
         }
         throw ArtError.timeout
     }
@@ -322,48 +346,81 @@ class SamsungArtClient: NSObject {
 
     // MARK: - TCP image upload
 
-    private func tcpUpload(_ data: Data, port: Int, secKey: String) async throws {
+    private func tcpUpload(_ data: Data, port: Int, secKey: String,
+                           secured: Bool, ip: String?) async throws {
         guard let nwPort = NWEndpoint.Port(rawValue: UInt16(port)) else {
             throw ArtError.noUploadPort
         }
-        let conn = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: .tcp)
+        // Connect to the address the TV handed back in ready_to_use (falls back to the
+        // configured host). Since 2024-era Frame firmware the d2d socket reports
+        // "secured": true and expects TLS; a plain TCP stream is accepted at the TCP
+        // level but the TV never reads the image, so no image_added ever arrives.
+        let targetHost = (ip?.isEmpty == false) ? ip! : host
+        let conn = NWConnection(host: NWEndpoint.Host(targetHost), port: nwPort,
+                                using: Self.d2dParameters(secured: secured))
+        onRawMessage?("→ d2d connect \(targetHost):\(port) \(secured ? "TLS" : "plain TCP")")
 
         try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, Error>) in
-            let once = Once()
+            let gate = D2DGate()
             conn.stateUpdateHandler = { state in
-                if case .ready = state {
-                    once.fire { cont.resume() }
-                } else if case .failed(let e) = state {
-                    once.fire { cont.resume(throwing: ArtError.uploadFailed(e.localizedDescription)) }
+                switch state {
+                case .ready:
+                    gate.fire { cont.resume() }
+                case .failed(let e), .waiting(let e):
+                    gate.fire { conn.cancel(); cont.resume(throwing: ArtError.uploadFailed(e.localizedDescription)) }
+                default: break
                 }
             }
             conn.start(queue: .global(qos: .userInitiated))
+            DispatchQueue.global().asyncAfter(deadline: .now() + 10) {
+                gate.fire { conn.cancel(); cont.resume(throwing: ArtError.uploadFailed("d2d connect timed out")) }
+            }
         }
 
         let header: [String: Any] = [
-            "num": 0, "total": 1, "fileLength": data.count,
-            "fileName": "dummy", "fileType": "jpg",
-            "secKey": secKey, "version": "0.0.1"
+            "num":        0,
+            "total":      1,
+            "fileLength": data.count,
+            "fileName":   "image",
+            "fileType":   "jpg",
+            "secKey":     secKey,
+            "version":    "0.0.1"
         ]
         guard let headerJSON = try? JSONSerialization.data(withJSONObject: header) else {
+            conn.cancel()
             throw ArtError.uploadFailed("Could not build upload header")
         }
         var lenBE = UInt32(headerJSON.count).bigEndian
         var prefix = Data(bytes: &lenBE, count: 4)
         prefix.append(headerJSON)
         onRawMessage?("→ TCP header: \(String(data: headerJSON, encoding: .utf8) ?? "")")
-        try await tcpSend(conn, content: prefix)
 
-        let chunkSize = 65_536
-        var offset = 0
-        while offset < data.count {
-            let end = min(offset + chunkSize, data.count)
-            try await tcpSend(conn, content: data[offset..<end])
-            offset = end
-            onUploadProgress?(Double(offset) / Double(data.count))
+        do {
+            try await tcpSend(conn, content: prefix)
+            let chunkSize = 65_536
+            var offset = 0
+            while offset < data.count {
+                let end = min(offset + chunkSize, data.count)
+                try await tcpSend(conn, content: data.subdata(in: offset..<end))
+                offset = end
+                onUploadProgress?(Double(offset) / Double(data.count))
+            }
+        } catch {
+            conn.cancel()
+            throw error
         }
-        conn.cancel()
+        conn.cancel()   // graceful: flushes, then TLS close_notify / FIN
         onRawMessage?("→ TCP upload complete (\(data.count) bytes)")
+    }
+
+    /// Plain TCP, or TLS that accepts the TV's self-signed certificate.
+    private static func d2dParameters(secured: Bool) -> NWParameters {
+        guard secured else { return .tcp }
+        let tls = NWProtocolTLS.Options()
+        sec_protocol_options_set_verify_block(tls.securityProtocolOptions, { _, _, complete in
+            complete(true)
+        }, .global())
+        return NWParameters(tls: tls, tcp: NWProtocolTCP.Options())
     }
 
     private func tcpSend(_ conn: NWConnection, content: Data) async throws {

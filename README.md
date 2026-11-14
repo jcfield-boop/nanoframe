@@ -297,6 +297,7 @@ Key discoveries:
 - `set_artmode_status` and `set_slideshow_status` are silently ignored on some firmware — to resume art rotation, fetch `get_content_list` (category `MY-C0004`) and `select_image` on any `SAM-*` content ID
 - Image deletion is confirmed with `image_list_deleted`, not `image_deleted`
 - Image upload uses a separate TCP connection on a port provided in the `ready_to_use` event; `conn_info` is itself a JSON-encoded string
+- When `conn_info` says `"secured": true` (2024+ Frame firmware), that upload socket is **TLS** with a self-signed cert. Sending plain TCP there connects fine but the TV never answers with `image_added`, so uploads hang after the TCP header. Nanoframe now picks TLS or plain TCP from that flag and connects to the `ip` the TV returns.
 - Both `id` and `request_id` must be present and equal in every request — newer firmware silently ignores requests missing `request_id`
 - Content categories: `MY-C0002` = user uploads (`MY_F*` IDs), `MY-C0004` = Samsung Art Store (`SAM-*` IDs)
 
